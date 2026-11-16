@@ -11,7 +11,8 @@ const list = useTemplateRef<HTMLUListElement>('list');
 const items = useTemplateRef<HTMLLIElement[]>('items');
 
 const open = ref(false);
-const activeIdx = ref(0);
+// -1 until the list is first opened, so nothing is marked active (or announced) before then.
+const activeIdx = ref(-1);
 const listStyle = ref<Record<string, string>>({});
 
 const current = computed(() => modeById(model.value));
@@ -119,7 +120,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocumentPoin
         tabindex="-1"
         :hidden="!open"
         :style="listStyle"
-        :aria-activedescendant="'mode-' + MODES[activeIdx]?.id"
+        :aria-activedescendant="MODES[activeIdx] ? 'mode-' + MODES[activeIdx].id : undefined"
         @keydown="onListKey"
       >
         <li

@@ -2,12 +2,18 @@
 import { computed, useTemplateRef } from 'vue';
 import { useGlobe } from './composables/useGlobe';
 import { fmtLatLon } from './lib/format';
+import { countryNames } from './map/search';
+import CountryCard from './ui/CountryCard.vue';
+import CountrySearch from './ui/CountrySearch.vue';
 import LayerToggles from './ui/LayerToggles.vue';
 import MapLegend from './ui/MapLegend.vue';
 import ModeDropdown from './ui/ModeDropdown.vue';
+import PicksList from './ui/PicksList.vue';
 
 const host = useTemplateRef<HTMLElement>('host');
 const g = useGlobe(host);
+
+const names = computed(() => (g.world.value ? countryNames(g.world.value.countries) : []));
 
 const coords = computed(
   () =>
@@ -23,6 +29,14 @@ const coords = computed(
         <p>Drag to turn, scroll or pinch to zoom, click a country for details.</p>
         <div id="coords" class="coords">{{ coords }}</div>
       </div>
+      <CountrySearch :names="names" @search="g.searchCountry" />
+      <PicksList
+        :items="g.pickItems.value"
+        :selected="g.selected.value"
+        @select="g.selectCountry"
+        @remove="g.togglePick"
+        @clear="g.clearPicks"
+      />
       <ModeDropdown :model-value="g.modeId.value" @update:model-value="g.setMode" />
       <MapLegend :legend="g.mode.value.legend" />
       <LayerToggles
@@ -38,6 +52,7 @@ const coords = computed(
     </aside>
     <main id="stage">
       <div ref="host" class="globe-host"></div>
+      <CountryCard :info="g.card.value" @close="g.closeCard" />
       <p v-if="g.loadError.value" class="load-error" role="alert">{{ g.loadError.value }}</p>
     </main>
   </div>

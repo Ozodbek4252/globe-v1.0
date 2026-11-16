@@ -53,6 +53,7 @@ const scenarios = [
   { name: 'lights', toggle: ['lights'], wait: 5000 },
   { name: 'lights-zoom4', toggle: ['lights'], keys: Array(6).fill('='), wait: 5000 },
   { name: 'daynight-lights', mode: 'daynight', wait: 5000 },
+  { name: 'search-uzbekistan', type: ['#q', 'Uzbekistan'], press: ['#q', 'Enter'], wait: 2500 },
   { name: 'pick-one', click: [[0, 0]] },
   { name: 'pick-three', click: [[0, 0], [-120, 40], [150, -30]] },
   { name: 'phone-default', viewport: PHONE },
@@ -118,6 +119,9 @@ async function capture(browser, url, scenario, label) {
   for (const key of scenario.keys ?? []) await page.keyboard.press(key);
   for (const name of scenario.toggle ?? []) await page.click(`#t-${name}`);
 
+  if (scenario.type) await page.fill(scenario.type[0], scenario.type[1]);
+  if (scenario.press) await page.press(scenario.press[0], scenario.press[1]);
+
   const box = await page.locator(STAGE).boundingBox();
   for (const [dx, dy] of scenario.click ?? []) {
     await page.mouse.click(box.x + box.width / 2 + dx, box.y + box.height / 2 + dy);
@@ -147,6 +151,138 @@ function diff(a, b) {
   return { count, total: A.width * A.height, png: PNG.sync.write(D) };
 }
 
+// ---------- DOM structure comparison (--mode dom) ----------
+// Serialises ids, classes, roles, aria-*, tabindex, hidden and text for everything in .app, in
+// document order, for each of a few UI states, and prints any line that differs.
+async function domSnapshot(page) {
+  return page.evaluate(() => {
+    const KEEP = ['id', 'role', 'tabindex', 'type', 'for', 'list', 'placeholder', 'autocomplete'];
+    const lines = [];
+    const walk = (el, depth) => {
+      if (['SCRIPT', 'STYLE'].includes(el.tagName)) return;
+      // The new app wraps the canvases in .globe-host and creates them from script, so their
+      // ids/hidden flags differ by design; compare everything around them instead.
+      if (el.matches('canvas, .globe-host')) return;
+      const bits = [el.tagName.toLowerCase()];
+      for (const name of KEEP) if (el.hasAttribute(name)) bits.push(`${name}=${el.getAttribute(name)}`);
+      for (const a of el.attributes) if (a.name.startsWith('aria-')) bits.push(`${a.name}=${a.value}`);
+      if (el.hasAttribute('class')) bits.push('.' + [...el.classList].sort().join('.'));
+      if (el.hasAttribute('hidden')) bits.push('[hidden]');
+      const own = [...el.childNodes]
+        .filter((n) => n.nodeType === 3)
+        .map((n) => n.textContent.replace(/\s+/g, ' ').trim())
+        .filter(Boolean)
+        .join(' | ');
+      lines.push(`${'  '.repeat(depth)}<${bits.join(' ')}>${own ? ' "' + own + '"' : ''}`);
+      for (const child of el.children) walk(child, depth + 1);
+    };
+    walk(document.querySelector('.app'), 0);
+    return lines;
+  });
+}
+
+const DOM_STATES = [
+  { name: 'initial', run: async () => {} },
+  {
+    name: 'dropdown-open',
+    run: async (page) => {
+      await page.click('#mode-btn');
+      await page.waitForTimeout(200);
+    },
+  },
+  {
+    name: 'dropdown-arrow-down',
+    run: async (page) => {
+      await page.keyboard.press('ArrowDown');
+      await page.keyboard.press('ArrowDown');
+    },
+  },
+  {
+    name: 'mode-chosen-gdp',
+    run: async (page) => {
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(200);
+    },
+  },
+  {
+    name: 'layer-toggled',
+    run: async (page) => {
+      await page.click('#t-cities');
+    },
+  },
+  {
+    name: 'one-pick',
+    run: async (page) => {
+      const box = await page.locator(STAGE).boundingBox();
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      await page.waitForTimeout(300);
+    },
+  },
+  {
+    name: 'two-picks',
+    run: async (page) => {
+      const box = await page.locator(STAGE).boundingBox();
+      await page.mouse.click(box.x + box.width / 2 - 120, box.y + box.height / 2 + 40);
+      await page.waitForTimeout(300);
+    },
+  },
+  {
+    name: 'card-closed',
+    run: async (page) => {
+      await page.click('#card .x');
+      await page.waitForTimeout(200);
+    },
+  },
+  {
+    name: 'cleared',
+    run: async (page) => {
+      await page.click('#picks .clear');
+      await page.waitForTimeout(200);
+    },
+  },
+];
+
+async function domRun(browser, url) {
+  const context = await browser.newContext({ viewport: DESKTOP, deviceScaleFactor: 1 });
+  await context.addInitScript(() => localStorage.setItem('atlas-mode', 'natural'));
+  const page = await context.newPage();
+  await page.clock.setFixedTime(FROZEN_TIME);
+  await page.goto(url, { waitUntil: 'load' });
+  await page.waitForSelector(CANVAS, { timeout: 20000 });
+  await page.evaluate(() => document.fonts.ready);
+  await page.waitForTimeout(1200);
+  const states = {};
+  for (const state of DOM_STATES) {
+    try {
+      await state.run(page);
+      states[state.name] = await domSnapshot(page);
+    } catch (e) {
+      states[state.name] = [`!! state failed: ${e.message.split('\n')[0]}`];
+    }
+  }
+  await context.close();
+  return states;
+}
+
+async function domMain(browser, legacyUrl, newUrl) {
+  const legacy = await domRun(browser, legacyUrl);
+  const next = await domRun(browser, newUrl);
+  let total = 0;
+  for (const state of DOM_STATES) {
+    const a = legacy[state.name];
+    const b = next[state.name];
+    const diffs = [];
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+      if (a[i] !== b[i]) diffs.push(`  legacy: ${a[i] ?? '(none)'}\n  new:    ${b[i] ?? '(none)'}`);
+    }
+    total += diffs.length;
+    console.log(`${state.name.padEnd(22)} ${diffs.length ? diffs.length + ' differences' : 'identical'} (${a.length}/${b.length} nodes)`);
+    for (const d of diffs.slice(0, 12)) console.log(d);
+    if (diffs.length > 12) console.log(`  ... ${diffs.length - 12} more`);
+  }
+  console.log(`\ntotal DOM differences: ${total}`);
+}
+
 // ---------- main ----------
 const wanted = arg('scenarios', '').split(',').filter(Boolean);
 const list = wanted.length ? scenarios.filter((s) => wanted.includes(s.name)) : scenarios;
@@ -166,6 +302,12 @@ const browser = await chromium.launch({
 });
 
 console.log(`legacy: ${legacyUrl}\nnew:    ${newUrl}\n`);
+if (arg('mode', 'shots') === 'dom') {
+  await domMain(browser, legacyUrl, newUrl);
+  await browser.close();
+  server.close();
+  process.exit(0);
+}
 const rows = [];
 for (const scenario of list) {
   const legacy = await capture(browser, legacyUrl, scenario, 'legacy');
