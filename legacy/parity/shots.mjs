@@ -175,13 +175,15 @@ for (const scenario of list) {
   writeFileSync(join(OUT, `${scenario.name}.legacy.full.png`), legacy.full);
   writeFileSync(join(OUT, `${scenario.name}.new.full.png`), next.full);
   const d = diff(legacy.stage, next.stage);
+  const f = diff(legacy.full, next.full);
   if (d.png) writeFileSync(join(OUT, `${scenario.name}.diff.png`), d.png);
-  rows.push({ scenario: scenario.name, d, legacy, next });
-  const pct = d.total ? ((d.count / d.total) * 100).toFixed(3) : 'n/a';
+  if (f.png) writeFileSync(join(OUT, `${scenario.name}.diff.full.png`), f.png);
+  rows.push({ scenario: scenario.name, d, f, legacy, next });
+  const show = (x) => x.sizeMismatch ?? `${x.count} px (${((x.count / x.total) * 100).toFixed(3)}%)`;
   console.log(
-    `${scenario.name.padEnd(24)} stage diff: ${d.sizeMismatch ?? `${d.count} px (${pct}%)`}` +
-      `  webgl2: ${legacy.webgl}/${next.webgl}` +
-      `  console: legacy ${legacy.problems.length}, new ${next.problems.length}`,
+    `${scenario.name.padEnd(24)} stage: ${show(d).padEnd(18)} page: ${show(f).padEnd(18)}` +
+      ` webgl2: ${legacy.webgl}/${next.webgl}` +
+      ` console: legacy ${legacy.problems.length}, new ${next.problems.length}`,
   );
   for (const p of next.problems) console.log(`    new    ! ${p}`);
   for (const p of legacy.problems) console.log(`    legacy ! ${p}`);
@@ -189,5 +191,9 @@ for (const scenario of list) {
 
 await browser.close();
 server.close();
-const worst = Math.max(...rows.map((r) => (r.d.total ? r.d.count / r.d.total : 1)));
-console.log(`\nworst stage diff: ${(worst * 100).toFixed(3)}%  (images in ${resolve(OUT)})`);
+const ratio = (x) => (x.total ? x.count / x.total : 1);
+console.log(
+  `\nworst stage diff: ${(Math.max(...rows.map((r) => ratio(r.d))) * 100).toFixed(3)}%` +
+    `   worst page diff: ${(Math.max(...rows.map((r) => ratio(r.f))) * 100).toFixed(3)}%` +
+    `   (images in ${resolve(OUT)})`,
+);
