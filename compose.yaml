@@ -30,18 +30,5 @@ services:
     entrypoint: ['npm']
     profiles: ['tools']
 
-  # Legacy-vs-new screenshot comparison in headless Chromium. Needs `dist/` (npm run build).
-  #   docker compose run --rm parity node /opt/parity/shots.mjs [--scenarios a,b]
-  # Lives with legacy/ and goes away when legacy/ is deleted.
-  parity:
-    build: ./legacy/parity
-    profiles: ['parity']
-    working_dir: /app
-    init: true
-    ipc: host
-    volumes:
-      - .:/app
-      - ./legacy/parity/shots.mjs:/opt/parity/shots.mjs:ro
-
 volumes:
   node_modules:

@@ -6,7 +6,7 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default defineConfig(
-  { ignores: ['dist', 'coverage', 'legacy', 'public', 'node_modules', '.parity'] },
+  { ignores: ['dist', 'coverage', 'public', 'node_modules'] },
 
   js.configs.recommended,
   tseslint.configs.recommendedTypeChecked,

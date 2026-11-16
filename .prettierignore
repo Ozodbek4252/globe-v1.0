@@ -1,7 +1,5 @@
 dist
 coverage
-legacy
 public
 node_modules
-.parity
 package-lock.json

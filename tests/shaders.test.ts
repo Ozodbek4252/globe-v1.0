@@ -27,8 +27,8 @@ describe('night-lights shaders', () => {
     expect(vertexSource).toMatch(/in vec2 p;/);
   });
 
-  // The shader was moved out of legacy/index.html unchanged. If you edit it on purpose,
-  // update these hashes in the same commit.
+  // The shader was moved out of the original index.html unchanged (see git history, commit
+  // ac482a7). If you edit it on purpose, update these hashes in the same commit.
   it('are unchanged from the legacy page', () => {
     expect(sha256(vertexSource)).toBe(
       '13325b6d00a060d570d9deeaecded411460b83ebedb51f0593d3b85976cf53f4',

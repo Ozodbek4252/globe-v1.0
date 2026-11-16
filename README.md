@@ -73,9 +73,8 @@ src/
   sim/                        placeholder for the future simulation (pure functions)
   styles/                     tokens.css, base.css
 tests/                        Vitest
-scripts/                      extract-data.mjs (one-off), check.ps1
-legacy/                       the original single-file app and its comparison tooling
-compose.yaml                  Docker tasks: dev, tools, parity
+scripts/                      check.ps1 (runs the checks in Docker)
+compose.yaml                  Docker tasks: dev, tools
 ```
 
 Imports only point one way: `ui -> composables -> globe -> map -> lib`. `globe`, `map` and `lib` never
@@ -119,21 +118,19 @@ repo's Pages address, after a rename or fork, on a custom domain, or from `vite 
 repo name appearing anywhere. If you later add history-mode routing, switch `base` to the repo path
 (`'/<repo>/'`), because relative URLs break on deep links.
 
-## Comparing against the original
+## The original single-file app
 
-`legacy/index.html` is the original single-file app, kept so the rewrite can be checked against it.
-`legacy/parity` has a headless-Chromium comparison (Playwright in Docker) that loads both, applies
-identical inputs and compares them. Build first, then:
+This project started as one `index.html` with its JavaScript, CSS and data inline. Comments and test
+names that say "legacy" mean that version. It is kept in git history, not in the tree:
 
-```bash
-docker compose run --rm tools run build
-docker compose --profile parity run --rm parity node /opt/parity/shots.mjs                  # screenshots, pixel diff
-docker compose --profile parity run --rm parity node /opt/parity/shots.mjs --mode dom       # ids, classes, aria-*, text
-docker compose --profile parity run --rm parity node /opt/parity/shots.mjs --mode behavior  # interactions, localStorage
-```
+- The original app: `git show ac482a7:index.html`.
+- The script that extracted its embedded data into `public/data/`: `git show b190895:scripts/extract-data.mjs`.
+- The headless-Chromium tooling used to check the rewrite against it (screenshot diffs, DOM and
+  behaviour comparison): the `legacy/parity/` folder in commit `78a534b`.
 
-Images go to `.parity/` (git-ignored). Once you are satisfied, delete `legacy/`, the `parity` service in
-`compose.yaml`, and `scripts/extract-data.mjs` (it can only read the legacy file).
+The rewrite matched the original pixel for pixel in 31 of 33 comparison scenarios, with identical DOM
+structure and behaviour. The two phone-width differences came from a layout bug in the original: its
+stage could never shrink, because the canvas's pixel height acted as the grid row's minimum size.
 
 ## Data credits
 

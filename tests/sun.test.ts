@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { sunPosition } from '../src/lib/sun';
 
 describe('sunPosition', () => {
-  // Golden values: the output of the original function in legacy/index.html for these moments.
+  // Golden values: the output of the original function in the first single-file index.html
+  // (git commit ac482a7) for these moments.
   const golden: [string, number, number][] = [
     ['2000-01-01T12:00:00Z', 0.8241750650725521, -23.033503799852458],
     ['2000-01-01T18:00:00Z', -89.14623157619098, -23.013430209602173],
