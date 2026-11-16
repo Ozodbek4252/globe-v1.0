@@ -581,7 +581,8 @@ export function buildRoads(roads: readonly CityRoad[]): RoadMeshes {
     if (road.kind === 'path' || road.kind === 'pedestrian') {
       addRibbon(paths, road.points, road.width, z, scale(PATH, jitter), 0.1);
     } else if (MAJOR.has(road.kind)) {
-      addRibbon(major, road.points, road.width, z, scale(ASPHALT, jitter), 1 / 8);
+      // The lane-marking texture carries the asphalt colour itself, so it is only dimmed here.
+      addRibbon(major, road.points, road.width, z, [jitter, jitter, jitter], 1 / 8);
     } else {
       addRibbon(minor, road.points, road.width, z, scale(ASPHALT, jitter * 1.08), 0.1);
     }

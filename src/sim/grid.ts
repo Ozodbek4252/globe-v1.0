@@ -7,6 +7,7 @@
 export const OCC_BUILDING = 1;
 export const OCC_ROAD = 2;
 export const OCC_WATER = 4;
+export const OCC_TREE = 8;
 
 export interface Grid {
   /** Cell side in metres. */

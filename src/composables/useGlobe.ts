@@ -67,6 +67,7 @@ export function useGlobe(host: Readonly<ShallowRef<HTMLElement | null>>) {
   // Not reactive: the API object is only ever called, never rendered.
   let globe: GlobeApi | null = null;
   let disposed = false;
+  let paused = false; // remembered, because the globe may not exist yet when something covers it
   const unsubscribe: Unsubscribe[] = [];
 
   writeStored(MODE_KEY, modeId.value);
@@ -82,6 +83,7 @@ export function useGlobe(host: Readonly<ShallowRef<HTMLElement | null>>) {
     if (disposed || !host.value) return;
     world.value = loaded;
     globe = createGlobe(host.value, { world: loaded, mode: modeId.value, layers: { ...layers } });
+    if (paused) globe.setPaused(true);
     unsubscribe.push(
       globe.onHover((h) => (hover.value = h)),
       globe.onPicksChange((s) => {
@@ -168,6 +170,10 @@ export function useGlobe(host: Readonly<ShallowRef<HTMLElement | null>>) {
     togglePick: (code: string): void => globe?.togglePick(code),
     closeCard: (): void => globe?.closeCard(),
     clearPicks: (): void => globe?.clearPicks(),
+    setPaused(value: boolean): void {
+      paused = value;
+      globe?.setPaused(value);
+    },
     zoomIn: (): void => globe?.zoomBy(1.4),
     zoomOut: (): void => globe?.zoomBy(1 / 1.4),
     resetView: (): void => globe?.resetView(),

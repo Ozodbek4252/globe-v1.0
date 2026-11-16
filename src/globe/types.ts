@@ -51,6 +51,8 @@ export interface GlobeOptions {
 export interface GlobeApi {
   setMode(id: ModeId): void;
   setLayer(name: LayerName, on: boolean): void;
+  /** Stop drawing and animating (for example while something is covering the globe). */
+  setPaused(paused: boolean): void;
 
   /** Add to the picks, open the info card and fly there (search box, chips). */
   selectCountry(code: string): void;

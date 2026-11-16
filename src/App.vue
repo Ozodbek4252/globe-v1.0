@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, useTemplateRef } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue';
 import { useGlobe } from './composables/useGlobe';
 import { fmtLatLon } from './lib/format';
 import { countryNames } from './map/search';
+import CityView from './ui/CityView.vue';
 import CountryCard from './ui/CountryCard.vue';
 import CountrySearch from './ui/CountrySearch.vue';
 import DayNightClock from './ui/DayNightClock.vue';
@@ -22,6 +23,32 @@ const coords = computed(
   () =>
     `CENTER ${fmtLatLon(g.view.value.lat, g.view.value.lon)} · ${g.view.value.zoom.toFixed(1)}×`,
 );
+
+// The 3D city covers the whole window. #city in the address opens it directly.
+const cityOpen = ref(false);
+const enterButton = useTemplateRef<HTMLButtonElement>('enterButton');
+const setHash = (hash: string): void =>
+  history.replaceState(null, '', location.pathname + location.search + hash);
+
+function openCity(): void {
+  cityOpen.value = true;
+  setHash('#city');
+}
+async function closeCity(): Promise<void> {
+  cityOpen.value = false;
+  setHash('');
+  await nextTick();
+  enterButton.value?.focus();
+}
+const syncFromHash = (): void => {
+  cityOpen.value = location.hash === '#city';
+};
+watch(cityOpen, (open) => g.setPaused(open), { immediate: true });
+onMounted(() => {
+  syncFromHash();
+  window.addEventListener('hashchange', syncFromHash);
+});
+onBeforeUnmount(() => window.removeEventListener('hashchange', syncFromHash));
 </script>
 
 <template>
@@ -47,6 +74,13 @@ const coords = computed(
         :lights-status="g.lightsStatus.value"
         @toggle="(name) => g.setLayer(name, !g.layers[name])"
       />
+      <div>
+        <p class="label lbl-modes">Play</p>
+        <button id="enter-city" ref="enterButton" class="enter" type="button" @click="openCity">
+          <span>Enter Tashkent</span>
+          <small>3D city from real map data · preview</small>
+        </button>
+      </div>
       <div class="foot">
         Data: Natural Earth 1:110m, 1:50m when zoomed in (country figures are 2019 estimates). Night
         lights: NASA Black Marble 2016. Borders are simplified and shown as Natural Earth draws
@@ -62,6 +96,7 @@ const coords = computed(
     </main>
   </div>
   <HoverTip :tip="g.tip.value" />
+  <CityView v-if="cityOpen" city-id="tashkent" title="Tashkent" @close="closeCity" />
 </template>
 
 <style>
@@ -90,6 +125,30 @@ const coords = computed(
   font-size: 12px;
   color: var(--faint);
   line-height: 1.4;
+}
+.enter {
+  width: 100%;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(240, 181, 74, 0.45);
+  background: rgba(240, 181, 74, 0.08);
+  color: var(--ink);
+  cursor: pointer;
+  font: 500 15px var(--f-body);
+}
+.enter small {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 400;
+}
+.enter:hover {
+  background: rgba(240, 181, 74, 0.14);
+}
+.enter:focus-visible {
+  outline: 2px solid var(--accent);
 }
 .load-error {
   position: absolute;

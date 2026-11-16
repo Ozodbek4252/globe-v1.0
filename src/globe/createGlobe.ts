@@ -172,14 +172,17 @@ export function createGlobe(host: HTMLElement, options: GlobeOptions): GlobeApi 
   // ---------- loop ----------
   let last = performance.now();
   let frameId = 0;
+  let paused = false;
   function frame(now: number): void {
     const dt = Math.min(64, now - last);
     last = now;
-    stepMotion(state, now, dt, { spin: layers.spin, hasPicks: picks.size > 0 });
-    if (state.dirty) {
-      draw();
-      emitView();
-      state.dirty = false;
+    if (!paused) {
+      stepMotion(state, now, dt, { spin: layers.spin, hasPicks: picks.size > 0 });
+      if (state.dirty) {
+        draw();
+        emitView();
+        state.dirty = false;
+      }
     }
     frameId = requestAnimationFrame(frame);
   }
@@ -297,6 +300,10 @@ export function createGlobe(host: HTMLElement, options: GlobeOptions): GlobeApi 
     setLayer(name, on) {
       layers[name] = on;
       state.dirty = true;
+    },
+    setPaused(value) {
+      paused = value;
+      if (!value) state.dirty = true; // catch up on anything that changed meanwhile
     },
 
     selectCountry(code) {

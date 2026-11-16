@@ -5,8 +5,10 @@ select them. Nine map modes (physical, natural, political, continents, populatio
 person, income group, live day and night), a NASA night-lights layer, search, and a country card.
 
 It is a Vite + TypeScript + Vue 3 app. The globe is drawn with Canvas 2D (d3-geo) plus a WebGL2
-fragment shader for the night lights. It is the base for a world-scale outbreak strategy game; the
-game itself is not part of this repo yet (see [src/sim](src/sim/README.md)).
+fragment shader for the night lights. It is the base for an outbreak survival game. The first piece
+of it is in: press **Enter Tashkent** to drop from the globe into a 3D city built from real
+OpenStreetMap buildings (see [The 3D city](#the-3d-city)). The game itself is not built yet; the
+simulation will live in [src/sim](src/sim/README.md).
 
 ## Run it
 
@@ -63,6 +65,7 @@ If you already have Node, the plain commands work too: `npm install`, `npm run d
 public/
   img/            NASA Black Marble night-lights textures (13500x6750 and 8192x4096)
   data/           countries-110m, rivers, lakes, cities, countries-50m (JSON)
+  cities/         3D city maps from OpenStreetMap (tashkent.json), with their licence notice
 src/
   main.ts  App.vue            layout: sidebar plus globe stage
   composables/useGlobe.ts     the one place Vue meets the globe: small UI state, forwards actions
@@ -76,17 +79,52 @@ src/
     modes.ts                  the nine modes: colours, scales, legends, tooltips
     data.ts                   loaders, 110m/50m switching, bounding circles
     climate.ts  info.ts  search.ts  types.ts
-  lib/                        sun position, formatters, sphere helpers, storage, url
-  ui/                         Vue components (dropdown, legend, search, picks, card, ...)
-  sim/                        placeholder for the future simulation (pure functions)
+  city/                       the 3D city (Three.js), plain TypeScript, no Vue
+    osm.ts  types.ts          OpenStreetMap to the compact CityData format (pure, tested)
+    geometry.ts  palette.ts   footprints to meshes: walls, roofs, roads, parks, water, towers
+    trees.ts  lamps.ts        deterministic trees and street lamps; occupancy.ts for placement
+    sunlight.ts  sky.ts       the real sun at Tashkent, sky colours, sky dome
+    textures.ts               facades with lit windows, road markings, ground grain
+    cameraRig.ts              the strategy-game camera maths
+    createCity.ts  load.ts    builds the scene and runs it; loads public/cities/<id>.json
+  lib/                        sun position, formatters, sphere helpers, storage, url, hash
+  ui/                         Vue components (dropdown, legend, search, picks, card, CityView, ...)
+  sim/                        grid.ts (occupancy grid); the rest is a placeholder (pure functions)
   styles/                     tokens.css, base.css
 tests/                        Vitest
-scripts/                      check.ps1 (runs the checks in Docker)
+scripts/                      check.ps1, editor-deps.ps1, fetch-city.mjs (OpenStreetMap extractor)
 compose.yaml                  Docker tasks: dev, tools
 ```
 
-Imports only point one way: `ui -> composables -> globe -> map -> lib`. `globe`, `map` and `lib` never
-import Vue.
+Imports only point one way: `ui -> composables -> globe | city -> map -> lib`. `globe`, `city`, `map`
+and `lib` never import Vue, and `city` and `globe` do not import each other.
+
+## The 3D city
+
+**Enter Tashkent** in the sidebar (or open `/#city`) loads a 2 km by 2 km district around the Tashkent
+TV Tower: about 3,800 real building footprints, roads, canals, parks and 500 mapped trees, plus
+generated trees and street lamps. Three.js and the city code download only when you press the button,
+so the globe page stays light.
+
+- **Controls:** `W A S D` or drag to move, `Q E` or right-drag to turn, `R F` to tilt, wheel to zoom,
+  `T` for the TV tower, `H` for home, `P` for a performance panel, `Esc` back to the globe.
+- **Time of day:** a slider sets the real sun position over Tashkent (a fixed autumn date). Windows and
+  street lamps light up as it gets dark.
+- **Deep links:** `/?hour=17.4&view=x,y,yaw,pitch,distance#city` opens at a given time and viewpoint
+  (metres east and north of the centre, degrees, metres).
+- **Heights:** OpenStreetMap tags a height for only about 5% of Tashkent's buildings, so the rest are
+  estimated from the kind of building and its footprint. The estimate is deterministic.
+
+To make another city (or redo this one), run the extractor in Docker; it writes
+`public/cities/<id>.json` and prints what it found:
+
+```bash
+docker compose run --rm --entrypoint node tools scripts/fetch-city.mjs \
+  --id tashkent --name "Tashkent" --lat 41.3457 --lon 69.2848 --half 1000
+```
+
+It queries the public Overpass servers, which are sometimes busy; the script retries across servers.
+The map data is licensed under the ODbL, see [public/cities/README.md](public/cities/README.md).
 
 ### The globe API
 
@@ -146,3 +184,6 @@ stage could never shrink, because the canvas's pixel height acted as the grid ro
   domain). Country figures are 2019 estimates.
 - Night lights: [NASA Earth Observatory, Black Marble 2016](https://earthobservatory.nasa.gov/features/NightLights)
   (public domain).
+- 3D city: © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright), available under the
+  [Open Database Licence](https://opendatacommons.org/licenses/odbl/1-0/). Credited in the city view.
+- 3D rendering: [Three.js](https://threejs.org/) (MIT) and [earcut](https://github.com/mapbox/earcut) (ISC).

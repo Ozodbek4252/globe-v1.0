@@ -65,7 +65,7 @@ export const GROUND: Record<AreaKind, Rgb> = {
   parking: srgb(0x5a5c5e),
 };
 
-export const TERRAIN = srgb(0x6e6a5e);
+export const TERRAIN = srgb(0x8d8876);
 export const ASPHALT = srgb(0x3b3e41);
 export const PATH = srgb(0x8c8776);
 export const WATER = srgb(0x3d6a86);
