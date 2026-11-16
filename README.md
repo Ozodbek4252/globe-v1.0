@@ -31,9 +31,17 @@ docker compose run --rm tools run format
 On Windows, `./scripts/check.ps1` runs format, typecheck, lint, test and build in one go and prints a
 line per step (`./scripts/check.ps1 test lint` for a subset).
 
-`node_modules` lives in a Docker volume, so your editor will not see it. For editor IntelliSense,
-either run `npm install` on the host as well (Node 22.12 or newer; `.nvmrc` pins the version used in
-CI) or attach VS Code to the container.
+The tasks above use a `node_modules` that lives in a Docker volume, which your editor cannot see. Without
+it, VS Code reports errors such as "Cannot find type definition file for 'node'" and unresolved
+imports. To fix that without installing anything on your machine, copy the dependencies into the
+project folder (git-ignored) using Docker:
+
+```powershell
+./scripts/editor-deps.ps1     # then in VS Code: "TypeScript: Restart TS Server"
+```
+
+Re-run it after `package.json` or `package-lock.json` change. (If you have Node 22.12 or newer on the
+host, a plain `npm install` does the same job; `.nvmrc` pins the version CI uses.)
 
 If you already have Node, the plain commands work too: `npm install`, `npm run dev`.
 
