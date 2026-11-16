@@ -9,6 +9,7 @@
 // preselected through localStorage, and the same keyboard/mouse/click sequence.
 
 import { createReadStream, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { lookup } from 'node:dns/promises';
 import { createServer } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
 import pixelmatch from 'pixelmatch';
@@ -610,7 +611,12 @@ if (!list.length) {
 const newTarget = arg('new', 'dist');
 const base = `http://localhost:${PORT}`;
 const legacyUrl = `${base}/legacy/index.html`;
-const newUrl = newTarget === 'dev' ? 'http://dev:5173/' : `${base}/dist/index.html`;
+// The dev server is reached by container IP: Chromium force-upgrades a bare "dev" host to HTTPS, and
+// Vite refuses hostnames it was not told about, but it accepts IP addresses.
+const newUrl =
+  newTarget === 'dev'
+    ? `http://${(await lookup('dev')).address}:5173/`
+    : `${base}/dist/index.html`;
 
 mkdirSync(OUT, { recursive: true });
 const server = await serveRepo();
