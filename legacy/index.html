@@ -333,7 +333,7 @@ const lightsGL = (() => {
     const max = gl.getParameter(gl.MAX_TEXTURE_SIZE);
     setLightsStatus('Loading NASA night lights…');
     // full 13500×6750 NASA image where the GPU allows it, 8192×4096 otherwise
-    img.src = max >= 13500 ? 'img/earth-night-full.jpg' : 'img/earth-night.jpg';
+    img.src = max >= 13500 ? '../public/img/earth-night-full.jpg' : '../public/img/earth-night.jpg';
   }
   function render(on, nightCenter) {
     cv.hidden = !on || !state.ready;
@@ -377,7 +377,7 @@ const HI = { land: null, loading: false };
 const HI_ZOOM = 2.6;
 function loadHi() {
   if (HI.loading) return; HI.loading = true;
-  fetch('data/countries-50m.json').then(r => r.json()).then(d => {
+  fetch('../public/data/countries-50m.json').then(r => r.json()).then(d => {
     for (const f of countries) {
       const parts = d[f.properties.a]; if (!parts) continue;
       f.hi = { type: 'Feature', properties: f.properties,
