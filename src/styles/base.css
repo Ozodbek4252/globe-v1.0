@@ -1,0 +1,26 @@
+/* Global base + layout. Component-specific rules live in each component's <style>. */
+html {
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+html,
+body {
+  height: 100%;
+}
+body {
+  margin: 0;
+}
+[hidden] {
+  display: none !important;
+}
+body {
+  background: radial-gradient(1200px 800px at 65% 45%, #0d1730 0%, var(--space) 60%) var(--space);
+  color: var(--ink);
+  font-family: var(--f-body);
+  font-size: 15px;
+  overflow: hidden;
+}
+#app {
+  height: 100%;
+}

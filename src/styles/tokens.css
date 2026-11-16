@@ -1,0 +1,16 @@
+/* Design tokens, copied unchanged from the legacy page. Single dark "night sky" look by choice. */
+:root {
+  --space: #060a13;
+  --space-2: #0c1322;
+  --panel: rgba(13, 20, 35, 0.86);
+  --ink: #e8edf5;
+  --muted: #8d99ae;
+  --faint: #56627a;
+  --line: #1f2a40;
+  --accent: #f0b54a;
+  --accent-ink: #1a1306;
+  --f-display: 'Alegreya Sans SC', 'Gill Sans', 'Trebuchet MS', sans-serif;
+  --f-body: 'Alegreya Sans', 'Gill Sans', 'Trebuchet MS', sans-serif;
+  --f-mono: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
