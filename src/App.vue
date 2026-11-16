@@ -5,10 +5,13 @@ import { fmtLatLon } from './lib/format';
 import { countryNames } from './map/search';
 import CountryCard from './ui/CountryCard.vue';
 import CountrySearch from './ui/CountrySearch.vue';
+import DayNightClock from './ui/DayNightClock.vue';
+import HoverTip from './ui/HoverTip.vue';
 import LayerToggles from './ui/LayerToggles.vue';
 import MapLegend from './ui/MapLegend.vue';
 import ModeDropdown from './ui/ModeDropdown.vue';
 import PicksList from './ui/PicksList.vue';
+import ZoomControls from './ui/ZoomControls.vue';
 
 const host = useTemplateRef<HTMLElement>('host');
 const g = useGlobe(host);
@@ -52,10 +55,13 @@ const coords = computed(
     </aside>
     <main id="stage">
       <div ref="host" class="globe-host"></div>
+      <DayNightClock :active="g.modeId.value === 'daynight'" />
+      <ZoomControls @zoom-in="g.zoomIn" @zoom-out="g.zoomOut" @reset="g.resetView" />
       <CountryCard :info="g.card.value" @close="g.closeCard" />
       <p v-if="g.loadError.value" class="load-error" role="alert">{{ g.loadError.value }}</p>
     </main>
   </div>
+  <HoverTip :tip="g.tip.value" />
 </template>
 
 <style>

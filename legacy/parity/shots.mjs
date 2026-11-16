@@ -29,6 +29,13 @@ const arg = (name, fallback) => {
 };
 
 // ---------- scenarios ----------
+// A scenario marked `known` is expected to differ, for the stated reason. In the legacy page the
+// canvas sits directly in <main>, so its pixel height (the height attribute) becomes the minimum
+// size of the grid row: the stage can grow but never shrink. On a phone that stops the bottom sheet
+// growing when its content does (after a pick it scrolls 31px of controls out of view) and rounds
+// the stage up by a fraction of a pixel; on desktop it keeps the globe from fitting a window made
+// shorter. The Vite build keeps the canvas out of layout, so it resizes correctly.
+const LEGACY_RATCHET = 'legacy stage height never shrinks (canvas size feeds the grid row minimum)';
 // toggle: layer buttons to click once (#t-labels, #t-grid, #t-cities, #t-lights, #t-spin)
 // keys:   pressed on the globe canvas ('=' zooms in by 1.25x, arrows rotate)
 // click:  [dx, dy] from the stage centre; a click picks a country
@@ -56,8 +63,16 @@ const scenarios = [
   { name: 'search-uzbekistan', type: ['#q', 'Uzbekistan'], press: ['#q', 'Enter'], wait: 2500 },
   { name: 'pick-one', click: [[0, 0]] },
   { name: 'pick-three', click: [[0, 0], [-120, 40], [150, -30]] },
+  { name: 'hover-tip', hover: [0, 0] },
+  { name: 'hover-tip-population', mode: 'population', hover: [-60, 30] },
+  { name: 'zoom-buttons', clickSel: ['#zin', '#zin', '#zout'], wait: 2000 },
+  { name: 'zoom-reset', keys: ['ArrowLeft', 'ArrowLeft', '='], clickSel: ['#zreset'], wait: 3000 },
+  { name: 'dropdown-open', clickSel: ['#mode-btn'], wait: 600 },
   { name: 'phone-default', viewport: PHONE },
-  { name: 'phone-pick', viewport: PHONE, click: [[0, 0]] },
+  { name: 'phone-pick', viewport: PHONE, click: [[0, 0]], known: LEGACY_RATCHET },
+  { name: 'phone-dropdown-open', viewport: PHONE, clickSel: ['#mode-btn'], wait: 600 },
+  { name: 'phone-daynight', viewport: PHONE, mode: 'daynight', wait: 3000, known: LEGACY_RATCHET },
+  { name: 'phone-lights', viewport: PHONE, toggle: ['lights'], wait: 4000 },
 ];
 
 // ---------- static server for the repo root ----------
@@ -89,6 +104,16 @@ function serveRepo() {
 const STAGE = '#stage';
 const CANVAS = '#stage canvas[tabindex="0"]';
 
+// Web fonts load lazily, per weight and unicode subset, so "fonts.ready" can fire before the face
+// a late-rendered piece of text needs has even been requested. That made screenshots race. Load every
+// declared face explicitly and wait for them, so both pages are measured with the same fonts.
+async function settleFonts(page) {
+  await page.evaluate(async () => {
+    await Promise.all([...document.fonts].map((face) => face.load().catch(() => null)));
+    await document.fonts.ready;
+  });
+}
+
 async function capture(browser, url, scenario, label) {
   const viewport = scenario.viewport ?? DESKTOP;
   const context = await browser.newContext({ viewport, deviceScaleFactor: 1 });
@@ -112,7 +137,7 @@ async function capture(browser, url, scenario, label) {
 
   await page.goto(url, { waitUntil: 'load' });
   await page.waitForSelector(CANVAS, { timeout: 20000 });
-  await page.evaluate(() => document.fonts.ready);
+  await settleFonts(page);
   await page.waitForTimeout(1200);
 
   await page.focus(CANVAS);
@@ -127,7 +152,12 @@ async function capture(browser, url, scenario, label) {
     await page.mouse.click(box.x + box.width / 2 + dx, box.y + box.height / 2 + dy);
     await page.waitForTimeout(150);
   }
-  await page.mouse.move(2, 2); // keep the pointer off the globe: no hover highlight or tooltip
+  for (const sel of scenario.clickSel ?? []) await page.click(sel);
+  if (scenario.hover) {
+    await page.mouse.move(box.x + box.width / 2 + scenario.hover[0], box.y + box.height / 2 + scenario.hover[1]);
+  } else if (!(scenario.clickSel ?? []).includes('#mode-btn')) {
+    await page.mouse.move(2, 2); // keep the pointer off the globe: no hover highlight or tooltip
+  }
   await page.waitForTimeout(scenario.wait ?? 1500);
 
   const stage = await page.locator(STAGE).screenshot({ animations: 'disabled' });
@@ -174,15 +204,35 @@ async function domSnapshot(page) {
         .filter(Boolean)
         .join(' | ');
       lines.push(`${'  '.repeat(depth)}<${bits.join(' ')}>${own ? ' "' + own + '"' : ''}`);
+      // Hidden elements: legacy leaves their old content in place, the Vue version clears it.
+      // Nobody can see or hear it either way, so don't compare it (the #mode list is the exception:
+      // its options exist while closed and are part of the structure).
+      if (el.hasAttribute('hidden') && el.id !== 'modes') return;
       for (const child of el.children) walk(child, depth + 1);
     };
     walk(document.querySelector('.app'), 0);
+    walk(document.querySelector('#tip'), 0);
     return lines;
   });
 }
 
 const DOM_STATES = [
   { name: 'initial', run: async () => {} },
+  {
+    name: 'tip-shown',
+    run: async (page) => {
+      const box = await page.locator(STAGE).boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.waitForTimeout(200);
+    },
+  },
+  {
+    name: 'tip-hidden',
+    run: async (page) => {
+      await page.mouse.move(2, 2);
+      await page.waitForTimeout(200);
+    },
+  },
   {
     name: 'dropdown-open',
     run: async (page) => {
@@ -249,7 +299,7 @@ async function domRun(browser, url) {
   await page.clock.setFixedTime(FROZEN_TIME);
   await page.goto(url, { waitUntil: 'load' });
   await page.waitForSelector(CANVAS, { timeout: 20000 });
-  await page.evaluate(() => document.fonts.ready);
+  await settleFonts(page);
   await page.waitForTimeout(1200);
   const states = {};
   for (const state of DOM_STATES) {
@@ -283,6 +333,273 @@ async function domMain(browser, legacyUrl, newUrl) {
   console.log(`\ntotal DOM differences: ${total}`);
 }
 
+// ---------- behaviour comparison (--mode behavior) ----------
+// Runs the same interactions on both pages and compares what they report (the coordinates readout,
+// the picks list, localStorage, console errors). Each check returns a string; equal strings pass.
+async function openFresh(browser, url, { reducedMotion = false, blockStorage = false, mode = 'natural' } = {}) {
+  const context = await browser.newContext({
+    viewport: DESKTOP,
+    deviceScaleFactor: 1,
+    reducedMotion: reducedMotion ? 'reduce' : 'no-preference',
+  });
+  if (blockStorage) {
+    await context.addInitScript(() => {
+      Object.defineProperty(window, 'localStorage', {
+        get() {
+          throw new DOMException('blocked', 'SecurityError');
+        },
+      });
+    });
+  } else {
+    await context.addInitScript((m) => {
+      // seed a known starting mode, but never overwrite a mode the page itself saved
+      if (localStorage.getItem('atlas-mode') === null) localStorage.setItem('atlas-mode', m);
+    }, mode);
+  }
+  const page = await context.newPage();
+  const errors = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+  await page.clock.setFixedTime(FROZEN_TIME);
+  await page.goto(url, { waitUntil: 'load' });
+  await page.waitForSelector(CANVAS, { timeout: 20000 });
+  await settleFonts(page);
+  await page.waitForTimeout(800);
+  return { context, page, errors };
+}
+
+const coords = (page) => page.locator('#coords').innerText();
+const center = async (page) => {
+  const b = await page.locator(STAGE).boundingBox();
+  return [b.x + b.width / 2, b.y + b.height / 2];
+};
+
+const BEHAVIOR_CHECKS = [
+  {
+    name: 'keyboard rotate and zoom',
+    run: async ({ page }) => {
+      await page.focus(CANVAS);
+      for (const k of ['ArrowLeft', 'ArrowLeft', 'ArrowLeft', 'ArrowUp', 'ArrowUp', '=', '=', '-', 'ArrowRight'])
+        await page.keyboard.press(k);
+      return coords(page);
+    },
+  },
+  {
+    name: 'wheel zoom',
+    run: async ({ page }) => {
+      const [x, y] = await center(page);
+      await page.mouse.move(x, y);
+      await page.mouse.wheel(0, -300);
+      await page.mouse.wheel(0, -200);
+      await page.mouse.wheel(0, 100);
+      await page.waitForTimeout(200);
+      return coords(page);
+    },
+  },
+  {
+    name: 'zoom limits (max and min)',
+    run: async ({ page }) => {
+      await page.focus(CANVAS);
+      for (let i = 0; i < 20; i++) await page.keyboard.press('=');
+      const max = await coords(page);
+      for (let i = 0; i < 40; i++) await page.keyboard.press('-');
+      return `${max} | ${await coords(page)}`;
+    },
+  },
+  {
+    name: 'latitude clamp at the poles',
+    run: async ({ page }) => {
+      await page.focus(CANVAS);
+      for (let i = 0; i < 30; i++) await page.keyboard.press('ArrowUp');
+      const north = await coords(page);
+      for (let i = 0; i < 60; i++) await page.keyboard.press('ArrowDown');
+      return `${north} | ${await coords(page)}`;
+    },
+  },
+  {
+    name: 'zoom buttons',
+    run: async ({ page }) => {
+      await page.click('#zin');
+      await page.click('#zin');
+      await page.click('#zout');
+      return coords(page);
+    },
+  },
+  {
+    name: 'drag without coasting',
+    run: async ({ page }) => {
+      const [x, y] = await center(page);
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x - 150, y + 60, { steps: 8 });
+      await page.waitForTimeout(200); // resting before release cancels inertia
+      await page.mouse.up();
+      await page.waitForTimeout(300);
+      return coords(page);
+    },
+  },
+  {
+    name: 'search flies to the country',
+    run: async ({ page }) => {
+      await page.fill('#q', 'Brazil');
+      await page.press('#q', 'Enter');
+      await page.waitForTimeout(1600);
+      return `${await coords(page)} | ${await page.locator('#picks').innerText()}`;
+    },
+  },
+  {
+    name: 'search misses are ignored',
+    run: async ({ page }) => {
+      await page.fill('#q', 'Narnia');
+      await page.press('#q', 'Enter');
+      await page.waitForTimeout(300);
+      return `${await coords(page)} | ${await page.locator('#picks').innerText()}`;
+    },
+  },
+  {
+    name: 'reduced motion jumps instead of flying',
+    opts: { reducedMotion: true },
+    run: async ({ page }) => {
+      await page.fill('#q', 'Uzbekistan');
+      await page.press('#q', 'Enter');
+      await page.waitForTimeout(250); // an animated flight (1s) would still be under way
+      return coords(page);
+    },
+  },
+  {
+    name: 'click picks, click again drops, Escape clears',
+    run: async ({ page }) => {
+      const [x, y] = await center(page);
+      const log = [];
+      await page.mouse.click(x, y);
+      log.push(await page.locator('#picks').innerText());
+      await page.mouse.click(x - 120, y + 40);
+      log.push(await page.locator('#picks').innerText());
+      await page.mouse.click(x, y); // drop the first one again
+      log.push(await page.locator('#picks').innerText());
+      await page.focus(CANVAS);
+      await page.keyboard.press('Escape');
+      log.push(await page.locator('#picks').innerText());
+      return log.join(' || ');
+    },
+  },
+  {
+    name: 'chip click selects and card follows',
+    run: async ({ page }) => {
+      const [x, y] = await center(page);
+      await page.mouse.click(x, y);
+      await page.mouse.click(x - 120, y + 40);
+      const second = await page.locator('#card h2').innerText();
+      await page.locator('.chip .cn').first().click();
+      await page.waitForTimeout(1300);
+      return `${second} -> ${await page.locator('#card h2').innerText()} | ${await coords(page)}`;
+    },
+  },
+  {
+    name: 'card close keeps the picks',
+    run: async ({ page }) => {
+      const [x, y] = await center(page);
+      await page.mouse.click(x, y);
+      await page.click('#card .x');
+      return `${await page.locator('#card').isVisible()} | ${await page.locator('#picks').innerText()}`;
+    },
+  },
+  {
+    name: 'reset view clears picks and returns home',
+    run: async ({ page }) => {
+      const [x, y] = await center(page);
+      await page.mouse.click(x, y);
+      await page.focus(CANVAS);
+      await page.keyboard.press('ArrowLeft');
+      await page.click('#zreset');
+      await page.waitForTimeout(1500);
+      return `${await coords(page)} | ${await page.locator('#picks').innerText()}`;
+    },
+  },
+  {
+    name: 'mode is saved and restored',
+    run: async ({ page, url, context }) => {
+      await page.click('#mode-btn');
+      for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowDown');
+      await page.keyboard.press('Enter');
+      const saved = await page.evaluate(() => localStorage.getItem('atlas-mode'));
+      const shown = await page.locator('#mode-btn .nm').innerText();
+      const reloaded = await context.newPage();
+      await reloaded.goto(url, { waitUntil: 'load' });
+      await reloaded.waitForSelector(CANVAS);
+      const restored = await reloaded.locator('#mode-btn .nm').innerText();
+      return `saved=${saved} shown=${shown} restored=${restored}`;
+    },
+  },
+  {
+    name: 'works with localStorage blocked',
+    opts: { blockStorage: true },
+    run: async ({ page, errors }) => {
+      await page.click('#mode-btn');
+      await page.keyboard.press('ArrowDown');
+      await page.keyboard.press('Enter');
+      const shown = await page.locator('#mode-btn .nm').innerText();
+      return `mode=${shown} errors=${errors.length}`;
+    },
+  },
+  {
+    name: 'dropdown keys: Home, End, Escape, Tab',
+    run: async ({ page }) => {
+      const log = [];
+      const state = async () =>
+        page.evaluate(() => `${document.querySelector('#mode-btn').getAttribute('aria-expanded')}/${document.querySelector('#modes').getAttribute('aria-activedescendant')}/${document.activeElement.id}`);
+      await page.click('#mode-btn');
+      log.push(await state());
+      await page.keyboard.press('End');
+      log.push(await state());
+      await page.keyboard.press('Home');
+      log.push(await state());
+      await page.keyboard.press('ArrowUp');
+      log.push(await state());
+      await page.keyboard.press('Escape');
+      log.push(await state());
+      await page.keyboard.press('ArrowDown');
+      log.push(await state());
+      await page.keyboard.press('Tab');
+      log.push(await state());
+      return log.join(' ; ');
+    },
+  },
+  {
+    name: 'outside click closes the dropdown',
+    run: async ({ page }) => {
+      await page.click('#mode-btn');
+      await page.mouse.click(700, 300);
+      return page.locator('#mode-btn').getAttribute('aria-expanded');
+    },
+  },
+];
+
+async function behaviorMain(browser, legacyUrl, newUrl) {
+  let diffs = 0;
+  for (const check of BEHAVIOR_CHECKS) {
+    const results = [];
+    for (const url of [legacyUrl, newUrl]) {
+      const session = await openFresh(browser, url, check.opts);
+      try {
+        results.push(String(await check.run({ ...session, url })));
+      } catch (e) {
+        results.push(`!! ${e.message.split('\n')[0]}`);
+      }
+      if (!results.at(-1).startsWith('!!') && session.errors.length && !check.opts?.blockStorage) {
+        results[results.length - 1] += ` [console errors: ${session.errors.length}]`;
+      }
+      await session.context.close();
+    }
+    const same = results[0] === results[1];
+    if (!same) diffs++;
+    console.log(`${same ? 'same ' : 'DIFF '} ${check.name}`);
+    console.log(`        ${results[0]}`);
+    if (!same) console.log(`   new: ${results[1]}`);
+  }
+  console.log(`\nbehaviour differences: ${diffs} of ${BEHAVIOR_CHECKS.length}`);
+}
+
 // ---------- main ----------
 const wanted = arg('scenarios', '').split(',').filter(Boolean);
 const list = wanted.length ? scenarios.filter((s) => wanted.includes(s.name)) : scenarios;
@@ -308,6 +625,12 @@ if (arg('mode', 'shots') === 'dom') {
   server.close();
   process.exit(0);
 }
+if (arg('mode', 'shots') === 'behavior') {
+  await behaviorMain(browser, legacyUrl, newUrl);
+  await browser.close();
+  server.close();
+  process.exit(0);
+}
 const rows = [];
 for (const scenario of list) {
   const legacy = await capture(browser, legacyUrl, scenario, 'legacy');
@@ -325,7 +648,8 @@ for (const scenario of list) {
   console.log(
     `${scenario.name.padEnd(24)} stage: ${show(d).padEnd(18)} page: ${show(f).padEnd(18)}` +
       ` webgl2: ${legacy.webgl}/${next.webgl}` +
-      ` console: legacy ${legacy.problems.length}, new ${next.problems.length}`,
+      ` console: legacy ${legacy.problems.length}, new ${next.problems.length}` +
+      (scenario.known ? `\n    known difference: ${scenario.known}` : ''),
   );
   for (const p of next.problems) console.log(`    new    ! ${p}`);
   for (const p of legacy.problems) console.log(`    legacy ! ${p}`);
