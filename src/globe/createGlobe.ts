@@ -9,6 +9,7 @@ import { drawScene } from './draw2d';
 import { countryAt, type HitContext } from './hitTest';
 import { attachInput } from './input';
 import { CANVAS_FONT_FACES } from './labels';
+import { createLightsGL } from './lightsGL';
 import { baseScaleFor, createProjection, DEFAULT_ROT, visibleCountries } from './projection';
 import { createState, flyTo, setZoom, stepMotion } from './state';
 import {
@@ -98,6 +99,13 @@ export function createGlobe(host: HTMLElement, options: GlobeOptions): GlobeApi 
     },
   });
 
+  const lights = createLightsGL(lightsCanvas, {
+    onStatus: lightsStatusEvents.emit,
+    onReady: () => {
+      state.dirty = true;
+    },
+  });
+
   // ---------- size ----------
   function resize(): void {
     const r = host.getBoundingClientRect();
@@ -123,6 +131,7 @@ export function createGlobe(host: HTMLElement, options: GlobeOptions): GlobeApi 
       .rotate(rot)
       .precision(detailed ? 0 : 0.4);
     visible = visibleCountries(world.countries, { rot, scale, width, height });
+    const sun = mode.id === 'daynight' ? sunPosition(new Date()) : null;
 
     drawScene({
       ctx,
@@ -142,7 +151,17 @@ export function createGlobe(host: HTMLElement, options: GlobeOptions): GlobeApi 
       picks,
       hovered,
       selected,
-      sun: mode.id === 'daynight' ? sunPosition(new Date()) : null,
+      sun,
+    });
+
+    // WebGL night lights go on top of the 2D map; in Day & night they show on the night side only.
+    lights?.render({
+      on: layers.lights || sun !== null,
+      sun,
+      width: canvas.width,
+      height: canvas.height,
+      scale: scale * state.dpr,
+      rot,
     });
   }
 
@@ -318,6 +337,7 @@ export function createGlobe(host: HTMLElement, options: GlobeOptions): GlobeApi 
       clearInterval(sunTimer);
       resizeObserver.disconnect();
       detachInput();
+      lights?.dispose();
       hoverEvents.clear();
       picksEvents.clear();
       viewEvents.clear();
