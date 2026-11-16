@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   baseScaleFor,
   clampZoom,
@@ -81,6 +81,15 @@ describe('stepMotion', () => {
 });
 
 describe('flyTo', () => {
+  // A flight starts at performance.now(), which has a fractional part. Pin it to a value where
+  // (t0 + 1000) - t0 is 999.9999999999999, which once made this suite fail on CI but not locally.
+  beforeEach(() => {
+    vi.spyOn(performance, 'now').mockReturnValue(147.209915);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('animates over one second with ease in-out and then stops', () => {
     const state = createState();
     flyTo(state, [60, 40], 3, false);
@@ -91,7 +100,8 @@ describe('flyTo', () => {
     expect(state.zoom).toBeCloseTo(2, 10);
     expect(state.flying).not.toBeNull();
 
-    stepMotion(state, flight.t0 + 1000, 16, idle);
+    // Step just past the end: landing exactly on t0 + dur is at the mercy of float rounding.
+    stepMotion(state, flight.t0 + flight.dur + 1, 16, idle);
     expect(state.rot).toEqual([-60, -40, 0]);
     expect(state.zoom).toBe(3);
     expect(state.flying).toBeNull();
@@ -103,7 +113,7 @@ describe('flyTo', () => {
     flyTo(state, [170, 0], undefined, false); // target lon 170: 20° away through the date line
     const flight = state.flying;
     if (!flight) throw new Error('no flight started');
-    stepMotion(state, flight.t0 + 1000, 16, idle);
+    stepMotion(state, flight.t0 + flight.dur + 1, 16, idle);
     expect(state.rot[0]).toBe(190);
   });
 

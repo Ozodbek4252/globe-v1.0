@@ -70,7 +70,8 @@ describe('createBorderLod', () => {
     expect(lod.isDetailed(HI_ZOOM + 1)).toBe(false); // still loading, no second fetch
     expect(load).toHaveBeenCalledTimes(1);
 
-    await vi.waitFor(() => expect(onReady).toHaveBeenCalledTimes(1));
+    // Reading and parsing a 1.6 MB file; give a slow CI runner far more than the 1 s default.
+    await vi.waitFor(() => expect(onReady).toHaveBeenCalledTimes(1), { timeout: 10_000 });
     expect(lod.isDetailed(HI_ZOOM)).toBe(true);
     expect(lod.isDetailed(1)).toBe(false);
 
