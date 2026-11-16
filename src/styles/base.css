@@ -1,4 +1,4 @@
-/* Global base + layout. Component-specific rules live in each component's <style>. */
+/* Global base + page layout, ported from the legacy page. Component styles live in each component. */
 html {
   box-sizing: border-box;
   padding-top: env(safe-area-inset-top, 0px);
@@ -23,4 +23,67 @@ body {
 }
 #app {
   height: 100%;
+}
+
+/* Instrument rail on the left (bottom sheet on phones), globe fills the rest. */
+.app {
+  display: grid;
+  grid-template-columns: 290px 1fr;
+  height: 100%;
+}
+aside {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding-block: 20px;
+  padding-left: max(18px, env(safe-area-inset-left, 0px));
+  padding-right: 18px;
+  border-right: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(12, 19, 34, 0.9), rgba(8, 13, 24, 0.9));
+  overflow-y: auto;
+  z-index: 2;
+}
+main {
+  position: relative;
+  min-width: 0;
+  isolation: isolate;
+}
+.globe-host {
+  position: absolute;
+  inset: 0;
+}
+
+/* Small uppercase section label used above the search box, mode picker and layer toggles. */
+.label {
+  font-family: var(--f-display);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+
+@media (max-width: 760px) {
+  .app {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr auto;
+  }
+  aside {
+    order: 2;
+    border-right: 0;
+    border-top: 1px solid var(--line);
+    gap: 10px;
+    padding-block: 10px 12px;
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    max-height: 46vh;
+  }
+  .lbl-modes {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
 }
