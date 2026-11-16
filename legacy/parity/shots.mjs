@@ -613,8 +613,10 @@ const base = `http://localhost:${PORT}`;
 const legacyUrl = `${base}/legacy/index.html`;
 // The dev server is reached by container IP: Chromium force-upgrades a bare "dev" host to HTTPS, and
 // Vite refuses hostnames it was not told about, but it accepts IP addresses.
-const newUrl =
-  newTarget === 'dev'
+// `--new https://...` compares any deployed URL, such as the GitHub Pages site.
+const newUrl = newTarget.startsWith('http')
+  ? newTarget
+  : newTarget === 'dev'
     ? `http://${(await lookup('dev')).address}:5173/`
     : `${base}/dist/index.html`;
 
