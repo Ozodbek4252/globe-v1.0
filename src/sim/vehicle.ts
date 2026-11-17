@@ -62,11 +62,11 @@ export const CAR = {
   parkWidth: 3.5,
   /** Kerbside parking: a slot every `parkSlot` metres along each kerb, about `parkFill` of them taken, never two cars closer than `parkApart`. */
   parkSlot: 7,
-  parkFill: 0.5,
+  parkFill: 0.6,
   parkApart: 5.5,
   /** Roads this wide have cars along both kerbs; narrower ones along one. */
   parkBothFrom: 7,
-  parkMost: 6000 as number,
+  parkMost: 12000 as number,
 } as const;
 
 export interface Car {
