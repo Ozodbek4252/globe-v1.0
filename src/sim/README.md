@@ -23,6 +23,8 @@ City scale (a survivor, a city of people, a horde, a clock), all in metres, x ea
 | `daylight.ts`   | The clock: how dark it is at each hour, how many people are out, how frightened the city is            |
 | `humans.ts`     | The few percent of people in the street, as individuals: stroll, flee, go indoors, get bitten, turn    |
 | `game.ts`       | One game: two guns, noise, supplies, hunger, shelters, the outbreak, the clock, losing, events         |
+| `save.ts`       | A game as plain data, written out and read back exactly                                                |
+| `window.ts`     | Carrying a game into the next window of a big city: shift, fold, and a ledger of buildings by id       |
 
 `src/lib/rng.ts` is the seeded random number generator they all use.
 
