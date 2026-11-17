@@ -172,17 +172,21 @@ describe('the places that ship with the game', () => {
 });
 
 describe('a game going on at a place', () => {
-  it('is marked with the seconds so far, kept across a reload, and cleared with zero or a death', () => {
+  it('is marked with the seconds so far, kept across a reload, and cleared with zero', () => {
     let o: Outcomes = {};
     o = markInPlay(o, 'paris', 187.6);
     expect(o.paris).toEqual({ best: 0, fallen: false, deaths: 0, inPlay: 187 });
     expect(parseOutcomes(serializeOutcomes(o))).toEqual(o);
     o = markInPlay(o, 'paris', 0);
     expect(o.paris).toEqual({ best: 0, fallen: false, deaths: 0 });
-    o = markInPlay(recordDeath(o, 'paris', 50), 'paris', 70);
+  });
+
+  it('goes on after a death: the city is still there for the next survivor', () => {
+    let o: Outcomes = markInPlay({}, 'paris', 70);
     o = recordDeath(o, 'paris', 90);
-    expect(o.paris.inPlay).toBeUndefined();
+    expect(o.paris.inPlay).toBe(70);
     expect(o.paris.best).toBe(90);
+    expect(o.paris.fallen).toBe(true);
   });
 
   it('leaves a record alone that has nothing to clear', () => {

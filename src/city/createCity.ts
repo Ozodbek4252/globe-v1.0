@@ -39,6 +39,7 @@ import {
   drainEvents,
   GAME,
   interactionAt,
+  respawn,
   stepGame,
   validSpot,
   weaponConfig,
@@ -216,6 +217,7 @@ export type GameNotice =
   | { type: 'enter'; place: string }
   | { type: 'breach'; place: string }
   /** A new game has begun: forget everything announced. */
+  | { type: 'respawn' }
   | { type: 'restart' }
   | {
       type: 'over';
@@ -344,8 +346,8 @@ export interface CityScene {
   onRadar(listener: (frame: RadarFrame | null) => void): Unsubscribe;
   /** Fires when the camera is as far out as it goes and the wheel keeps zooming out: time for the globe. */
   onZoomOut(listener: () => void): Unsubscribe;
-  /** Start again from the beginning with a new random game. */
-  restart(): void;
+  /** Start again: a new random city (`fresh`), or, after dying, a new survivor in the same city. */
+  restart(fresh?: boolean): void;
   /** The game as it is now, as plain data, to be stored and given back as `GameSetup.resume`. */
   save(): SavedGame;
   /** Stop or resume the game. The picture keeps drawing; nothing in the game moves. */
@@ -674,6 +676,8 @@ export async function createCityScene(
     return createGame(gameWorld, gameOptions());
   };
   let game = newGame();
+  // a saved game whose survivor died: the city is as it was, and a new survivor steps out into it
+  if (game.status === 'lost') respawn(game, gameWorld, spawnX, spawnY);
   let player: PlayerState = game.player;
   let previous: PlayerState = player;
   const survivor = createSurvivor();
@@ -1091,9 +1095,16 @@ export async function createCityScene(
   }
 
   /** Begin a new game from the start: a fresh horde, supplies and clock, and the survivor back at the spawn. */
-  function restart(): void {
-    seed = Math.floor(Math.random() * 0xffffffff);
-    game = newGame();
+  function restart(fresh = true): void {
+    if (!fresh && game.status === 'lost') {
+      // the city goes on: a new survivor in it, where the outbreak has got to
+      respawn(game, gameWorld, spawnX, spawnY);
+      notices.emit({ type: 'respawn' });
+    } else {
+      seed = Math.floor(Math.random() * 0xffffffff);
+      game = newGame();
+      notices.emit({ type: 'restart' });
+    }
     player = previous = game.player;
     gamePhase = 'playing';
     paused = false;
@@ -1105,7 +1116,7 @@ export async function createCityScene(
     simClock = 0;
     goal = cameraMode === 'follow' ? recentred() : { ...home };
     easeRate = Math.max(easeRate, 10);
-    notices.emit({ type: 'restart' });
+    // (announced above, before the picture was reset)
   }
   function flashlightOn(): boolean {
     return flashlightPref === 'on' || (flashlightPref === 'auto' && darkness > 0.35);

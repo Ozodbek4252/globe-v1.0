@@ -130,7 +130,7 @@ function onTime(): void {
 const SAVE_EVERY_MS = 5000;
 let saveTimer = 0;
 function saveNow(): void {
-  if (!scene || disposed || player.value?.phase !== 'playing') return;
+  if (!scene || disposed) return;
   void putSave(props.cityId, scene.save());
 }
 function onVisibility(): void {
@@ -238,10 +238,15 @@ onMounted(async () => {
     });
     stopGame = created.onGame((n) => {
       hud.value?.push(n);
-      // a game that is over, or begun again, is not one to come back to
+      // the city goes on after a death (the next survivor steps into it), so it is saved as it is;
+      // only a new city throws the old one away
       if (n.type === 'over') {
-        void deleteSave(props.cityId);
         emit('over', n.time);
+        saveNow();
+      }
+      if (n.type === 'respawn') {
+        emit('restarted');
+        saveNow();
       }
       if (n.type === 'restart') {
         void deleteSave(props.cityId);
@@ -264,8 +269,13 @@ onMounted(async () => {
   }
 });
 
+/** After dying: the next survivor, in the same city. The scene announces it, and the HUD clears itself. */
 function restart(): void {
-  scene?.restart(); // the scene announces it, and the HUD clears itself
+  scene?.restart(false);
+}
+/** A new city altogether. */
+function fresh(): void {
+  scene?.restart(true);
 }
 
 onBeforeUnmount(() => {
@@ -311,6 +321,7 @@ onBeforeUnmount(() => {
         ref="hud"
         :player="player"
         @restart="restart"
+        @fresh="fresh"
         @close="emit('close')"
         @resume="setPaused(false)"
       />

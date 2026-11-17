@@ -4,7 +4,8 @@ import type { GameNotice, PlayerStatus } from '../city/createCity';
 import { fmtClock } from '../lib/format';
 
 const props = defineProps<{ player: PlayerStatus | null }>();
-const emit = defineEmits<{ restart: []; close: []; resume: [] }>();
+/** `restart`: carry on in the same city (a new survivor after dying); `fresh`: a new city altogether. */
+const emit = defineEmits<{ restart: []; fresh: []; close: []; resume: [] }>();
 const resumeButton = useTemplateRef<HTMLButtonElement>('resumeButton');
 
 // when the pause menu opens, put the keyboard on "Resume"
@@ -112,6 +113,12 @@ function push(n: GameNotice): void {
       break;
     case 'restart':
       reset();
+      break;
+    case 'respawn':
+      reset();
+      toast.value = { id, text: 'A new survivor. The city is as it was left.' };
+      announcement.value = 'A new survivor steps out. The city is as it was left.';
+      later(() => toast.value?.id === id && (toast.value = null), 4000);
       break;
     case 'over':
       over.value = n;
@@ -281,7 +288,7 @@ const accuracy = computed(() =>
           <button ref="resumeButton" class="city-btn primary" type="button" @click="emit('resume')">
             Resume <kbd>Esc</kbd>
           </button>
-          <button class="city-btn" type="button" @click="emit('restart')">Start again</button>
+          <button class="city-btn" type="button" @click="emit('fresh')">New city</button>
           <button class="city-btn" type="button" @click="emit('close')">Back to the globe</button>
         </div>
       </div>
@@ -290,7 +297,9 @@ const accuracy = computed(() =>
     <div v-if="over" class="hud-over" role="dialog" aria-modal="true" aria-label="You died">
       <div class="hud-card">
         <h2>You survived {{ survived }}</h2>
-        <p>There was no rescue coming. Next time, last longer.</p>
+        <p>
+          There was no rescue coming. The city goes on without you; the next survivor steps into it.
+        </p>
         <dl>
           <dt>Zombies killed</dt>
           <dd>{{ over.kills }}</dd>
@@ -303,8 +312,9 @@ const accuracy = computed(() =>
         </dl>
         <div class="hud-actions">
           <button ref="again" class="city-btn primary" type="button" @click="emit('restart')">
-            Play again <kbd>Enter</kbd>
+            Next survivor <kbd>Enter</kbd>
           </button>
+          <button class="city-btn" type="button" @click="emit('fresh')">New city</button>
           <button class="city-btn" type="button" @click="emit('close')">Back to the globe</button>
         </div>
       </div>

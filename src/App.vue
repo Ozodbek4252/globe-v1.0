@@ -69,7 +69,7 @@ function remark(id: string, country: string): string {
 // The 3D city covers the whole window. `#city=<id>` in the address opens it directly (`#city` alone
 // is Tashkent, the first place there was). Leaving for the globe does not end the game: the one city
 // you were in stays alive, asleep, and going back to it continues where you left off (paused). Only
-// opening another place, or a game that is over, lets it go.
+// opening another place lets it go (a death does not: the next survivor steps into the same city).
 const mountedId = ref<string | null>(null); // the city that exists
 const cityId = ref<string | null>(null); // the city that is showing (null: the globe)
 const cityOver = ref(false);
@@ -87,9 +87,9 @@ const setHash = (hash: string): void =>
   history.replaceState(null, '', location.pathname + location.search + hash);
 
 function openCity(id: string): void {
-  if (mountedId.value !== id || cityOver.value) {
-    // a new game: playing a fallen place again lights it up
-    if (play.outcomes.value[id]?.fallen) play.reclaim(id);
+  // going back to a fallen place lights it up: someone is in there again
+  if (play.outcomes.value[id]?.fallen) play.reclaim(id);
+  if (mountedId.value !== id) {
     mountedId.value = id;
     cityOver.value = false;
     cityTime.value = 0;
@@ -99,7 +99,6 @@ function openCity(id: string): void {
 }
 async function closeCity(): Promise<void> {
   cityId.value = null;
-  if (cityOver.value) mountedId.value = null; // nothing to come back to
   setHash('');
   await nextTick();
   playCard.value?.focus();

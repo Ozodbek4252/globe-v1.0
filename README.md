@@ -132,8 +132,14 @@ not one continuous zoom: the globe and the city are two different pictures.
 game (every zombie, every person, every door, the clock) is written to this browser's storage. Close
 the tab, come back tomorrow, open the place again: it is exactly where you left it, paused, with the
 horde where it stood. The card and the list say **in play** with the time so far, and the button says
-**Continue**. Dying ends the saved game, and so does **Start again**. A city you leave for the globe
-also stays alive in memory, so going straight back is instant.
+**Continue**. A city you leave for the globe also stays alive in memory, so going straight back is
+instant.
+
+**Dying does not end the city.** The outbreak goes on without you. **Next survivor** puts a fresh person
+at the start with a full pack, as far from the dead as the street allows, in the city exactly as it was:
+the horde where it stood, the clock where it got to, the doors that were broken still broken, the shops
+already searched still empty (ground supplies are laid out again). Your score is each survivor's own
+time. **New city** throws the whole place away and starts the outbreak over.
 
 **A place falls when you die in it.** Its pin turns into a red cross, and with the **Lights** layer on, a
 patch of darkness spreads over its glow on the globe. It stays dark, with the longest you lasted, until

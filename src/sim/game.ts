@@ -1294,6 +1294,63 @@ export function interactionAt(g: GameState, world: GameWorld): Interaction | nul
   }
 }
 
+/**
+ * A new survivor in the same city. The world stays as it is (the horde, the people, the outbreak, the
+ * clock, the doors, what has been searched); someone fresh steps out near the start with a full pack,
+ * as far from the dead as can be found close by, and supplies are laid out again on top of what is
+ * left, since the city has been picked over.
+ */
+export function respawn(g: GameState, world: GameWorld, startX: number, startY: number): void {
+  let bestX = startX;
+  let bestY = startY;
+  let bestGap = -1;
+  for (let ring = 0; ring <= 8 && bestGap < 40; ring++) {
+    const r = ring * 12;
+    const n = ring === 0 ? 1 : 8 * ring;
+    for (let k = 0; k < n; k++) {
+      const a = (k / n) * Math.PI * 2;
+      const x = startX + Math.cos(a) * r;
+      const y = startY + Math.sin(a) * r;
+      if (!validSpot(world, x, y, 1.5)) continue;
+      let gap = Infinity;
+      for (let i = 0; i < g.horde.used; i++) {
+        if (g.horde.state[i] >= ZState.DEAD) continue;
+        const d = Math.hypot(g.horde.x[i] - x, g.horde.y[i] - y);
+        if (d < gap) gap = d;
+      }
+      if (gap > bestGap) {
+        bestGap = gap;
+        bestX = x;
+        bestY = y;
+      }
+    }
+  }
+  g.player = createPlayer(bestX, bestY);
+  g.status = 'playing';
+  g.time = 0;
+  g.health = GAME.health;
+  g.sinceHurt = 99;
+  g.weapon = 'pistol';
+  g.ammo = GAME.weapon.mag;
+  g.reserve = GAME.weapon.reserve;
+  g.hasShotgun = false;
+  g.food = GAME.food.max;
+  g.stash = { ammo: 0, reserve: 0 };
+  g.reloading = 0;
+  g.fireCooldown = 0;
+  g.shoveCooldown = 0;
+  g.inside = -1;
+  g.stepTimer = 0;
+  g.noises = [];
+  g.stats = { kills: 0, shots: 0, hits: 0, damageTaken: 0, shoves: 0 };
+  g.pickups = g.pickups.filter((p) => !p.taken);
+  scatterPickups(g, world);
+  if (g.pickups.length > GAME.pickups.max) g.pickups = g.pickups.slice(-GAME.pickups.max);
+  g.flowTimer = 0;
+  g.flowCell = -1;
+  g.events = [];
+}
+
 /** Use whatever is at the survivor's door. Returns whether anything happened. */
 function interact(g: GameState, world: GameWorld): boolean {
   const here = interactionAt(g, world);

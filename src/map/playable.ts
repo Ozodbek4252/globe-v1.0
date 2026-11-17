@@ -104,10 +104,11 @@ export type Outcomes = Readonly<Record<string, Outcome>>;
 /** You died in a place after `seconds`: it has fallen, and the record is updated. */
 export function recordDeath(outcomes: Outcomes, id: string, seconds: number): Outcomes {
   const before = outcomes[id];
-  // a death ends whatever game was going on there
+  // the city goes on without that survivor: a game going on there stays going on
   return {
     ...outcomes,
     [id]: {
+      ...before,
       best: Math.max(before?.best ?? 0, Math.max(0, Math.floor(seconds))),
       fallen: true,
       deaths: (before?.deaths ?? 0) + 1,
