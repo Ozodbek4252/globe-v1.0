@@ -198,7 +198,10 @@ outbreak spreads through the district. How many are out follows the hour: a few 
 small hours, over a tenth in the morning rush and the evening. People leave their buildings and go home
 again through the day, and the more of the city has turned, the more of them stay in.
 
-**Night is worse.** When the sun goes down (a note under the clock says so) the dead are more active
+**Night is worse.** It is dark, and how dark depends on the moon, which each game gets from its seed:
+some nights are lit by a full moon, some have none at all (the note under the clock says which), and
+then the street lamps, the lit windows and your flashlight are all there is; `&moon=0` to `1` in the
+link picks it. When the sun goes down the dead are more active
 and more aggressive: they roam further and rest less, hear and smell further and rouse each other from
 further off, hunt a quarter faster, strike sooner and hit a quarter harder, and the infection spreads
 faster inside the buildings. A walker is still slower than you walking, and a runner than your sprint,
@@ -219,8 +222,9 @@ behind a door works, but it does not win the game.
 **Fighting**
 
 - **Aim and fire:** the mouse aims (the survivor turns to face it), holding the left button fires.
-  The pistol has 15 rounds a magazine and 45 in reserve; `R` reloads (it also reloads by itself when
-  empty). Bullets stop at walls. A zombie takes two pistol hits, a runner one.
+  The pistol has 15 rounds a magazine and 90 in reserve (up to 300); `R` reloads (it also reloads by
+  itself when empty). Bullets stop at walls. A zombie takes two pistol hits, a runner one. The armory
+  adds a shotgun and a rifle (`1` `2` `3` switch; each gun keeps its own ammunition).
 - **Out of ammunition?** Click anyway and you swing whatever you can lay hands on: slower and shorter
   than a gun, three blows to fell a walker. Zombies you kill sometimes drop ammunition, food or first aid
   (they were people once).
@@ -238,10 +242,11 @@ behind a door works, but it does not win the game.
   once stopped), `A` and `D` the wheel, as in any driving game (a car turns only while it rolls);
   `F` gets you out. On a road it does
   nearly 80 km/h, off one about 30; it slides along walls and never crosses one, and a hard crash
-  (above about 32 km/h) hurts you. Zombies in the way are run down, each one taking a little off your
-  speed. Inside, most of a blow lands on the bodywork instead of you; the car itself never breaks. The
-  engine is loud (up to 60 m at speed), so a drive brings the horde; the tank runs down (a full one
-  lasts about seven minutes flat out), and an empty car is left where it stands. Cars stay where you leave them, through saves, through the window moving across a big
+  costs the car (and above about 32 km/h, you) something. Zombies in the way are run down, which
+  wears the car a little each time. Inside, most of a blow lands on the bodywork instead of you, until
+  the car is wrecked. The engine is loud (up to 60 m at speed), so a drive brings the horde; the tank
+  runs down (a full one lasts about seven minutes flat out), and an empty or wrecked car is left where
+  it stands. Cars stay where you leave them, through saves, through the window moving across a big
   city, and for the next survivor.
 
 **Staying fed.** Hunger drains steadily; at zero you starve and nothing heals. Food crates and first aid
@@ -257,9 +262,10 @@ each in a colour for its job. Stand at the ring on the street in front and press
   trail keep coming to the door and batter it. When it gives way you are thrown out hurt and the
   shelter is lost for good. Hunger keeps going indoors, so hiding all game does not work either.
 - **Supplies** (amber: shops and clinics): search once for ammunition, health or food.
-- **Armory** (orange): a shotgun. `1` and `2` switch guns; each keeps its own ammunition. Eight pellets in
-  a wide cone: it kills close up, is weak at range and useless past 16 m, is slow to fire and to
-  reload, and is louder than the pistol (75 m).
+- **Armory** (orange): a shotgun and a rifle. The shotgun (`2`) fires eight pellets in a wide cone: it
+  kills close up, is weak at range and useless past 16 m, is slow to fire and to reload, and is louder
+  than the pistol (75 m). The rifle (`3`) drops a walker with one round at up to 70 m, holds five, is
+  slow between shots, and is the loudest thing you own (95 m).
 
 **Seeing it all.** From the free camera, or zoomed out, every zombie also shows as a red dot and every
 person in the street as a pale one; the radar scope shows the horde around you. Ground supplies have

@@ -66,6 +66,7 @@ import {
   parkCars,
   stepCar,
   stepOutSpot,
+  wrecked,
   type Car,
 } from './vehicle';
 import { validSpot, type GameWorld, type WorldRoad } from './world';
@@ -83,8 +84,8 @@ export const GAME = {
   regenRate: 2.5,
   weapon: {
     mag: 15,
-    reserve: 45,
-    reserveCap: 150,
+    reserve: 90,
+    reserveCap: 300,
     reload: 1.6,
     interval: 0.28,
     damage: 55,
@@ -101,8 +102,8 @@ export const GAME = {
   /** The armory's gun: eight pellets in a wide cone, deadly close up, weak and loud at range, slow to reload. */
   shotgun: {
     mag: 6,
-    reserve: 12,
-    reserveCap: 40,
+    reserve: 24,
+    reserveCap: 80,
     reload: 2.6,
     interval: 0.85,
     damage: 28,
@@ -113,6 +114,22 @@ export const GAME = {
     hitRadius: 0.42,
     pellets: 8,
     noise: 75,
+  },
+  /** The armory's other gun, a hunting rifle: one round drops a walker at any range you can see, but it is slow, and the loudest thing you own. */
+  rifle: {
+    mag: 5,
+    reserve: 20,
+    reserveCap: 60,
+    reload: 2.4,
+    interval: 0.8,
+    damage: 120,
+    range: 70,
+    spread: 0.006,
+    moveSpread: 0.03,
+    sprintSpread: 0.15,
+    hitRadius: 0.42,
+    pellets: 1,
+    noise: 95,
   },
   shove: {
     cooldown: 1.6,
@@ -146,8 +163,8 @@ export const GAME = {
     density: 7700,
   },
   pickups: {
-    ammo: 14,
-    ammoAmount: 15,
+    ammo: 24,
+    ammoAmount: 24,
     medkit: 6,
     medkitAmount: 40,
     food: 10,
@@ -169,9 +186,9 @@ export const GAME = {
     noise: 7,
   },
   /** Chance a zombie killed by you was carrying something (they were people once). */
-  drops: { ammo: 0.13, food: 0.06, medkit: 0.04, ammoAmount: 8 },
+  drops: { ammo: 0.2, food: 0.06, medkit: 0.04, ammoAmount: 14 },
   /** What searching a shop or clinic gives (a roll decides which). */
-  loot: { ammo: 24, health: 40, food: 40, both: 0.2 },
+  loot: { ammo: 40, health: 40, food: 40, both: 0.2 },
   /** Zombies with their hands on you slow you down by this much each, to a floor. */
   grabSlow: 0.18,
   grabFloor: 0.4,
@@ -194,7 +211,23 @@ export const GAME = {
 /** Playing; the survivor is dead (`lost`: the city goes on, another can step in); or the city is gone (`fallen`: nobody left in it). */
 export type GameStatus = 'playing' | 'lost' | 'fallen';
 
-export type WeaponName = 'pistol' | 'shotgun';
+export type WeaponName = 'pistol' | 'shotgun' | 'rifle';
+export const WEAPONS: readonly WeaponName[] = ['pistol', 'shotgun', 'rifle'];
+
+/** The magazine and spare rounds of each gun that is not in hand (the one in hand is `g.ammo`/`g.reserve`). */
+export type Stash = Record<WeaponName, { ammo: number; reserve: number }>;
+
+export function emptyStash(): Stash {
+  return {
+    pistol: { ammo: 0, reserve: 0 },
+    shotgun: { ammo: 0, reserve: 0 },
+    rifle: { ammo: 0, reserve: 0 },
+  };
+}
+
+export function copyStash(s: Stash): Stash {
+  return { pistol: { ...s.pistol }, shotgun: { ...s.shotgun }, rifle: { ...s.rifle } };
+}
 
 /** The numbers that make one gun different from another. */
 export interface WeaponConfig {
@@ -215,7 +248,7 @@ export interface WeaponConfig {
 
 /** The configuration of the gun in hand. */
 export function weaponConfig(name: WeaponName): WeaponConfig {
-  return name === 'shotgun' ? GAME.shotgun : GAME.weapon;
+  return name === 'shotgun' ? GAME.shotgun : name === 'rifle' ? GAME.rifle : GAME.weapon;
 }
 
 export interface Pickup {
@@ -266,10 +299,10 @@ export type GameEvent =
   | { type: 'door'; place: number; fraction: number }
   /** The door gave way: the horde is in, and the shelter is lost. */
   | { type: 'breach'; place: number }
-  /** The car: got in, got out, hit something hard (`force` is the speed lost, m/s), or ran dry. */
+  /** The car: got in, got out, hit something hard (`force` is the speed lost, m/s), ran dry, or was wrecked. */
   | {
       type: 'car';
-      what: 'enter' | 'exit' | 'crash' | 'fuel';
+      what: 'enter' | 'exit' | 'crash' | 'fuel' | 'wrecked';
       x: number;
       y: number;
       force: number;
@@ -291,8 +324,8 @@ export interface GameInput {
   reload: boolean;
   shove: boolean;
   interact: boolean;
-  /** Take out a gun: 1 the pistol, 2 the shotgun (once found); 0 for no change. Sent once per press. */
-  weapon: 0 | 1 | 2;
+  /** Take out a gun: 1 the pistol, 2 the shotgun, 3 the rifle (once found); 0 for no change. Sent once per press. */
+  weapon: 0 | 1 | 2 | 3;
   /** At the wheel: the pedal (1 forward, -1 brake then reverse) and the wheel (1 left, -1 right), as the keys are pressed. */
   throttle: number;
   steer: number;
@@ -390,12 +423,13 @@ export interface GameState {
   weapon: WeaponName;
   ammo: number;
   reserve: number;
-  /** The shotgun has been found. */
+  /** The armory's guns have been found. */
   hasShotgun: boolean;
+  hasRifle: boolean;
   /** How well fed the survivor is, 0 to 100. */
   food: number;
-  /** The magazine and spare rounds of the gun that is not in hand. */
-  stash: { ammo: number; reserve: number };
+  /** The magazine and spare rounds of each gun that is not in hand. */
+  stash: Stash;
   /** Seconds of reloading left; 0 when not reloading. */
   reloading: number;
   fireCooldown: number;
@@ -542,8 +576,9 @@ export function createGame(world: GameWorld, options: GameOptions): GameState {
     ammo: GAME.weapon.mag,
     reserve: GAME.weapon.reserve,
     hasShotgun: false,
+    hasRifle: false,
     food: GAME.food.max,
-    stash: { ammo: 0, reserve: 0 },
+    stash: emptyStash(),
     reloading: 0,
     fireCooldown: 0,
     shoveCooldown: 0,
@@ -707,9 +742,17 @@ function scatterPickups(g: GameState, world: GameWorld): void {
   }
 }
 
-function addNoise(g: GameState, x: number, y: number, radius: number, ttl: number): void {
+/** A sound the horde hears; `alarm` for one that frightens people too (gunfire, a crash). */
+function addNoise(
+  g: GameState,
+  x: number,
+  y: number,
+  radius: number,
+  ttl: number,
+  alarm = false,
+): void {
   if (g.noises.length >= 16) g.noises.shift();
-  g.noises.push({ x, y, radius, ttl });
+  g.noises.push({ x, y, radius, ttl, alarm });
 }
 
 function hurt(g: GameState, amount: number, fromX: number, fromY: number): void {
@@ -871,8 +914,13 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
 
   if (playing) {
     if (damage > 0) {
-      // in a car, most of a blow lands on the bodywork
-      const shielded = g.driving >= 0 ? damage * CAR.shield : 0;
+      // in a car, most of a blow lands on the car (while it is in one piece)
+      const car = g.driving >= 0 ? g.cars[g.driving] : null;
+      const shielded = car && !wrecked(car) ? damage * CAR.shield : 0;
+      if (car && shielded > 0) {
+        car.hp = Math.max(0, car.hp - shielded * CAR.blowWear); // the bodywork is tougher than you
+        if (wrecked(car)) emit(g, { type: 'car', what: 'wrecked', x: car.x, y: car.y, force: 0 });
+      }
       if (damage - shielded > 0) hurt(g, damage - shielded, g.horde.lastHitX, g.horde.lastHitY);
     }
     if (g.health <= 0) {
@@ -1104,12 +1152,18 @@ function breach(g: GameState, world: GameWorld, id: number): void {
   }
 }
 
-/** Take out the other gun. The magazine and spare rounds of each stay with it. */
+/** Whether the survivor carries a gun. */
+function carries(g: GameState, which: WeaponName): boolean {
+  return which === 'pistol' || (which === 'shotgun' ? g.hasShotgun : g.hasRifle);
+}
+
+/** Take out another gun. The magazine and spare rounds of each stay with it. */
 function switchWeapon(g: GameState, to: WeaponName): void {
-  if (to === g.weapon || (to === 'shotgun' && !g.hasShotgun)) return;
+  if (to === g.weapon || !carries(g, to)) return;
   g.reloading = 0; // a half-done reload is lost
-  [g.ammo, g.stash.ammo] = [g.stash.ammo, g.ammo];
-  [g.reserve, g.stash.reserve] = [g.stash.reserve, g.reserve];
+  g.stash[g.weapon] = { ammo: g.ammo, reserve: g.reserve };
+  g.ammo = g.stash[to].ammo;
+  g.reserve = g.stash[to].reserve;
   g.weapon = to;
   g.fireCooldown = 0.4; // a moment to bring it up
   emit(g, { type: 'weapon', weapon: to });
@@ -1117,7 +1171,7 @@ function switchWeapon(g: GameState, to: WeaponName): void {
 
 /** Spare rounds for a gun, in hand or not. */
 function reserveOf(g: GameState, which: WeaponName): number {
-  return which === g.weapon ? g.reserve : g.stash.reserve;
+  return which === g.weapon ? g.reserve : g.stash[which].reserve;
 }
 
 /** Add spare rounds to a gun (in hand or not), up to what it can carry. Returns how many went in. */
@@ -1125,7 +1179,7 @@ function addReserve(g: GameState, which: WeaponName, rounds: number): number {
   const room = weaponConfig(which).reserveCap - reserveOf(g, which);
   const added = Math.max(0, Math.min(rounds, room));
   if (which === g.weapon) g.reserve += added;
-  else g.stash.reserve += added;
+  else g.stash[which].reserve += added;
   return added;
 }
 
@@ -1136,7 +1190,7 @@ function stepWeapon(
   colliders: Colliders,
   dt: number,
 ): void {
-  if (input.weapon !== 0) switchWeapon(g, input.weapon === 2 ? 'shotgun' : 'pistol');
+  if (input.weapon !== 0) switchWeapon(g, WEAPONS[input.weapon - 1]);
   const w = weaponConfig(g.weapon);
   // reloading
   if (g.reloading > 0) {
@@ -1218,7 +1272,7 @@ function fireShot(g: GameState, aimAngle: number, colliders: Colliders): void {
       emit(g, { type: 'hit', x: endX, y: endY, kill: killed });
     }
   }
-  addNoise(g, p.x, p.y, w.noise, GAME.noise.shotTtl);
+  addNoise(g, p.x, p.y, w.noise, GAME.noise.shotTtl, true);
   emit(g, { type: 'noise', x: p.x, y: p.y, radius: w.noise });
   g.stats.shots++;
   if (anyHit) g.stats.hits++;
@@ -1346,13 +1400,17 @@ export function interactionAt(g: GameState, world: GameWorld): Interaction | nul
   }
   if (g.driving >= 0) {
     const car = g.cars[g.driving];
-    const name = car.fuel <= 0 ? 'Out of fuel' : 'Car';
+    const name = wrecked(car) ? 'The car is wrecked' : car.fuel <= 0 ? 'Out of fuel' : 'Car';
     return { kind: 'car', car: g.driving, label: 'Get out', name };
   }
   const car = carInReach(g.cars, g.player.x, g.player.y);
   if (car >= 0) {
     const c = g.cars[car];
-    const name = c.fuel <= 0 ? 'Out of fuel' : `Fuel ${Math.round(c.fuel * 100)}%`;
+    const name = wrecked(c)
+      ? 'Wrecked'
+      : c.fuel <= 0
+        ? 'Out of fuel'
+        : `Fuel ${Math.round(c.fuel * 100)}%`;
     return { kind: 'car', car, label: 'Get in', name };
   }
   let near: Place | null = null;
@@ -1441,7 +1499,9 @@ function drive(g: GameState, act: GameInput, world: GameWorld, dt: number): void
 
   // a wall: a knock, or a crash
   if (crash > CAR.crashSpeed) {
-    addNoise(g, car.x, car.y, CAR.crashNoise, GAME.noise.shotTtl);
+    const over = crash - CAR.crashSpeed;
+    car.hp = Math.max(0, car.hp - over * CAR.crashWear);
+    addNoise(g, car.x, car.y, CAR.crashNoise, GAME.noise.shotTtl, true);
     emit(g, { type: 'noise', x: car.x, y: car.y, radius: CAR.crashNoise });
     emit(g, { type: 'car', what: 'crash', x: car.x, y: car.y, force: crash });
     if (crash > CAR.hurtSpeed) {
@@ -1452,6 +1512,7 @@ function drive(g: GameState, act: GameInput, world: GameWorld, dt: number): void
         car.y + Math.sin(car.heading),
       );
     }
+    if (wrecked(car)) emit(g, { type: 'car', what: 'wrecked', x: car.x, y: car.y, force: crash });
   }
 
   // whoever is in the way
@@ -1484,6 +1545,8 @@ function drive(g: GameState, act: GameInput, world: GameWorld, dt: number): void
     }
     if (struck > 0) {
       car.speed -= Math.sign(car.speed) * Math.min(Math.abs(car.speed), CAR.hitSlow * struck);
+      car.hp = Math.max(0, car.hp - CAR.hitWear * struck);
+      if (wrecked(car)) emit(g, { type: 'car', what: 'wrecked', x: car.x, y: car.y, force: 0 });
     }
   }
 
@@ -1541,8 +1604,9 @@ export function respawn(g: GameState, world: GameWorld, startX: number, startY: 
   g.ammo = GAME.weapon.mag;
   g.reserve = GAME.weapon.reserve;
   g.hasShotgun = false;
+  g.hasRifle = false;
   g.food = GAME.food.max;
-  g.stash = { ammo: 0, reserve: 0 };
+  g.stash = emptyStash();
   g.reloading = 0;
   g.fireCooldown = 0;
   g.shoveCooldown = 0;
@@ -1589,12 +1653,15 @@ function interact(g: GameState, world: GameWorld): boolean {
   }
   // supplies and the armory: something to take
   if (place.kind === 'armory') {
-    // the armory's gun, with its shells, and pistol rounds besides
+    // the armory's guns, with their rounds, and pistol rounds besides
     const gotAmmo = addReserve(g, 'pistol', GAME.loot.ammo);
     g.hasShotgun = true;
-    // (it starts loaded: until you take it out, its magazine and spare shells wait in the stash)
-    g.stash.ammo = g.weapon === 'shotgun' ? g.stash.ammo : GAME.shotgun.mag;
+    g.hasRifle = true;
+    // (they start loaded: until you take one out, its magazine and spare rounds wait in the stash)
+    if (g.weapon !== 'shotgun') g.stash.shotgun.ammo = GAME.shotgun.mag;
+    if (g.weapon !== 'rifle') g.stash.rifle.ammo = GAME.rifle.mag;
     addReserve(g, 'shotgun', GAME.shotgun.reserve);
+    addReserve(g, 'rifle', GAME.rifle.reserve);
     g.used[place.id] = true;
     emit(g, {
       type: 'loot',

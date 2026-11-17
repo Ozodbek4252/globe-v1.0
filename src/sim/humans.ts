@@ -210,9 +210,9 @@ function sense(h: Humans, i: number, ctx: HumanContext): void {
   scan.threatY = 0;
   scan.threats = 0;
   forEachNear(ctx.zombies, x, y, HUMAN.sight, ctx.horde.x, ctx.horde.y, visitZombie);
-  // a gunshot or a scream nearby sends people running too, away from where it was
+  // a gunshot or a crash nearby sends people running too, away from where it was
   for (const n of ctx.noises) {
-    if (n.ttl <= 0 || n.radius < 30) continue; // footsteps do not scare anyone; gunfire does
+    if (n.ttl <= 0 || !n.alarm) continue; // footsteps and engines do not scare anyone; gunfire does
     const dx = x - n.x;
     const dy = y - n.y;
     const d2 = dx * dx + dy * dy;

@@ -79,13 +79,13 @@ const KEYS: Key[] = [
     zenith: 0x05080f,
     horizon: 0x101a33,
     light: 0x8fa6dc,
-    lightIntensity: 1.5,
+    lightIntensity: 1.0,
     hemiSky: 0x33477a,
     hemiGround: 0x141a26,
-    hemiIntensity: 2.0,
-    fillIntensity: 0.5,
+    hemiIntensity: 1.3,
+    fillIntensity: 0.35,
     windowGlow: 1,
-    exposure: 1.9,
+    exposure: 1.85,
     sunGlow: 0,
   },
   {
@@ -93,10 +93,10 @@ const KEYS: Key[] = [
     zenith: 0x0c1730,
     horizon: 0x3a3a5e,
     light: 0x93a8dc,
-    lightIntensity: 1.5,
+    lightIntensity: 1.2,
     hemiSky: 0x40568c,
     hemiGround: 0x1a1e2c,
-    hemiIntensity: 2.0,
+    hemiIntensity: 1.5,
     fillIntensity: 0.5,
     windowGlow: 0.95,
     exposure: 1.85,
@@ -176,8 +176,34 @@ const KEYS: Key[] = [
 
 const lin = (hex: number): Rgb => srgb(hex);
 
-/** Sky, light and window glow for a sun elevation in degrees, blended smoothly between keyframes. */
-export function skyPalette(elevation: number): SkyPalette {
+/** How much of the night's light is left with no moon at all (street lamps and windows are the rest). */
+const NO_MOON = 0.12;
+
+/**
+ * Sky, light and window glow for a sun elevation in degrees, blended smoothly between keyframes.
+ * `moon` is how bright the moon is tonight, 0 (new) to 1 (full): by night it scales the light, the
+ * sky's glow and the fill, so a moonless night is dark indeed; by day it does nothing.
+ */
+export function skyPalette(elevation: number, moon = 1): SkyPalette {
+  const p = keyedPalette(elevation);
+  const night = smoothstep(-3, -10, elevation);
+  const dim = 1 - night * (1 - Math.max(0, Math.min(1, moon))) * (1 - NO_MOON);
+  if (dim >= 1) return p;
+  return {
+    ...p,
+    lightIntensity: p.lightIntensity * dim,
+    hemiIntensity: p.hemiIntensity * dim,
+    fillIntensity: p.fillIntensity * dim,
+  };
+}
+
+/** 1 at or below `to`, 0 at or above `from`, smooth between (for a range that falls). */
+function smoothstep(from: number, to: number, v: number): number {
+  const t = Math.max(0, Math.min(1, (v - from) / (to - from)));
+  return t * t * (3 - 2 * t);
+}
+
+function keyedPalette(elevation: number): SkyPalette {
   const first = KEYS[0];
   const last = KEYS[KEYS.length - 1];
   const e = Math.max(first.elevation, Math.min(last.elevation, elevation));

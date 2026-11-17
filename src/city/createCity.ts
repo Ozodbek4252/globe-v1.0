@@ -58,7 +58,7 @@ import { sendHunting, spawnZombie, ZKind, ZState } from '../sim/horde';
 import { HState, spawnHuman } from '../sim/humans';
 import { speedOf, type PlayerState } from '../sim/player';
 import { isSavedGame, loadGame, saveGame, type SavedGame } from '../sim/save';
-import { CAR, createCar, onRoad, type Car } from '../sim/vehicle';
+import { CAR, createCar, onRoad, wrecked, type Car } from '../sim/vehicle';
 import {
   advanceLedger,
   ledgerOutside,
@@ -173,9 +173,12 @@ export interface PlayerStatus {
   loading: boolean;
   /** The game is paused: nothing moves, hunger and the clock stand still. */
   paused: boolean;
-  /** The gun in hand, and whether the shotgun has been found. */
+  /** The gun in hand, and whether the armory's guns have been found. */
   weapon: WeaponName;
   hasShotgun: boolean;
+  hasRifle: boolean;
+  /** How bright the moon is tonight, 0 (new) to 1 (full). */
+  moon: number;
   /** Rounds in the magazine, its size, and rounds in reserve (for the gun in hand). */
   ammo: number;
   magazine: number;
@@ -194,8 +197,8 @@ export interface PlayerStatus {
   population: { healthy: number; bitten: number; zombies: number; initial: number };
   /** What the survivor could do where they stand: use a door, get into a car (null when nothing). */
   prompt: { label: string; name: string } | null;
-  /** At the wheel: how fast (m/s) and the tank (0 to 1); null on foot. */
-  car: { speed: number; fuel: number } | null;
+  /** At the wheel: how fast (m/s), the tank (0 to 1), the car's condition (0 to 1); null on foot. */
+  car: { speed: number; fuel: number; condition: number; wrecked: boolean } | null;
   /** The radar is on: the minimap is available. */
   radarOn: boolean;
   /** The next goal, how far off it is, and where it lies on the screen (radians clockwise from up). */
@@ -235,8 +238,8 @@ export type GameNotice =
   | { type: 'radar'; place: string }
   | { type: 'enter'; place: string }
   | { type: 'breach'; place: string }
-  /** The car: got in, got out, a hard crash (`force` is the speed lost, m/s), or the tank ran dry. */
-  | { type: 'car'; what: 'enter' | 'exit' | 'crash' | 'fuel'; force: number }
+  /** The car: got in, got out, a hard crash (`force` is the speed lost, m/s), the tank ran dry, or it was wrecked. */
+  | { type: 'car'; what: 'enter' | 'exit' | 'crash' | 'fuel' | 'wrecked'; force: number }
   /** A new game has begun: forget everything announced. */
   | { type: 'respawn' }
   | { type: 'restart' }
@@ -362,6 +365,8 @@ export interface TiledCity {
 export interface CityOptions {
   /** Local hour (0-24) the game starts at; the day then goes by as you play. Default is morning. */
   hour?: number;
+  /** How bright the moon is at night, 0 (none) to 1 (full). Default: it follows the game's seed. */
+  moon?: number;
   /** Start from this viewpoint instead of the default one, with no fly-in. Implies the free camera. */
   view?: CityViewpoint;
   /** Which camera to start with. Default: follow the survivor (free when `view` is given). */
@@ -942,6 +947,11 @@ export async function createCityScene(
   let hour = startHour;
   let elevation = 0;
   let darkness = 0; // 0 in daylight, 1 at night: drives the flashlight and the glow
+  // The moon tonight: some games are lit by a full one, some have none at all. It follows the seed
+  // (so a saved game keeps its moon), unless the link says otherwise.
+  const moonOf = (s: number): number =>
+    0.5 - 0.5 * Math.cos((((s * 2654435761) >>> 0) / 4294967296) * Math.PI * 2);
+  let moon = options.moon ?? moonOf(seed);
   const lightDirection = new Vector3();
   const skyDirection = new Vector3();
 
@@ -949,7 +959,7 @@ export async function createCityScene(
     const date = REFERENCE_DAY + (hour - utcOffsetHours(data.center[0])) * 3_600_000;
     const angles = localSun(date, data.center[0], data.center[1]);
     elevation = angles.elevation;
-    const palette = skyPalette(angles.elevation);
+    const palette = skyPalette(angles.elevation, moon);
     // The light is the sun by day and shifts to a high "moon" at night, so shadows stay sensible.
     const night = smoothstep(8, -4, angles.elevation);
     const lightAngles = {
@@ -990,7 +1000,7 @@ export async function createCityScene(
   let reloadQueued = false;
   let shoveQueued = false;
   let interactQueued = false;
-  let weaponQueued: 0 | 1 | 2 = 0;
+  let weaponQueued: 0 | 1 | 2 | 3 = 0;
   let triggerHeld = false;
   // a game taken up from a save starts paused: you look round before the horde moves
   let paused = resumed && game.status === 'playing';
@@ -1013,8 +1023,8 @@ export async function createCityScene(
       if (!e.repeat) shoveQueued = true;
     } else if (k === 'f' && cameraMode === 'follow') {
       if (!e.repeat) interactQueued = true; // use the door you are standing at
-    } else if ((k === '1' || k === '2') && cameraMode === 'follow') {
-      weaponQueued = k === '1' ? 1 : 2; // take out the pistol / the shotgun
+    } else if ((k === '1' || k === '2' || k === '3') && cameraMode === 'follow') {
+      weaponQueued = k === '1' ? 1 : k === '2' ? 2 : 3; // the pistol / the shotgun / the rifle
     } else if (k === 'v') setCameraMode(cameraMode === 'follow' ? 'free' : 'follow');
     else if (k === 'l') flashlightPref = flashlightOn() ? 'off' : 'on';
     else if (k === 't' && tower) {
@@ -1331,6 +1341,8 @@ export async function createCityScene(
     } else {
       seed = Math.floor(Math.random() * 0xffffffff);
       game = newGame();
+      moon = options.moon ?? moonOf(seed); // another night, another moon
+      applyTime();
       notices.emit({ type: 'restart' });
     }
     player = previous = game.player;
@@ -1608,6 +1620,8 @@ export async function createCityScene(
         paused,
         weapon: game.weapon,
         hasShotgun: game.hasShotgun,
+        hasRifle: game.hasRifle,
+        moon,
         ammo: game.ammo,
         magazine: weaponConfig(game.weapon).mag,
         reserve: game.reserve,
@@ -1625,6 +1639,8 @@ export async function createCityScene(
             ? {
                 speed: Math.abs(game.cars[game.driving].speed),
                 fuel: game.cars[game.driving].fuel,
+                condition: game.cars[game.driving].hp / CAR.hp,
+                wrecked: wrecked(game.cars[game.driving]),
               }
             : null,
         radarOn: game.radarOn,

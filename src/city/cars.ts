@@ -14,7 +14,7 @@ import {
   type BufferGeometry,
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CAR, type Car } from '../sim/vehicle';
+import { CAR, wrecked, type Car } from '../sim/vehicle';
 
 export interface CarRenderer {
   object: Object3D;
@@ -47,6 +47,7 @@ const PAINTS = [
   new Color(0xd8d6d0), // white again: the commonest
   new Color(0x6b4e3a), // brown
 ];
+const WRECK = new Color(0x3a3634);
 const LAMP_ON = new Color(1.6, 1.5, 1.2);
 const LAMP_OFF = new Color(0.55, 0.55, 0.5);
 
@@ -125,7 +126,14 @@ export function createCarRenderer(max: number): CarRenderer {
   let lastCars: readonly Car[] | null = null;
   let lastCount = -1;
   let lastDriving = -1;
-  const place = (i: number, px: number, py: number, heading: number, lamp: Color): void => {
+  const place = (
+    i: number,
+    car: Car,
+    px: number,
+    py: number,
+    heading: number,
+    lamp: Color,
+  ): void => {
     // city (x, y) is Three.js (x, -y); the model points down +X, so the heading is the turn about Y
     dummy.position.set(px, 0, -py);
     dummy.rotation.set(0, heading, 0);
@@ -133,7 +141,7 @@ export function createCarRenderer(max: number): CarRenderer {
     bodies.setMatrixAt(i, dummy.matrix);
     wheels.setMatrixAt(i, dummy.matrix);
     lamps.setMatrixAt(i, dummy.matrix);
-    bodies.setColorAt(i, PAINTS[i % PAINTS.length]);
+    bodies.setColorAt(i, wrecked(car) ? WRECK : PAINTS[i % PAINTS.length]);
     lamps.setColorAt(i, lamp);
   };
   const flush = (): void => {
@@ -149,7 +157,8 @@ export function createCarRenderer(max: number): CarRenderer {
     update(cars, driving, x, y, heading, lit) {
       const n = Math.min(max, cars.length);
       if (cars !== lastCars || n !== lastCount) {
-        for (let i = 0; i < n; i++) place(i, cars[i].x, cars[i].y, cars[i].heading, LAMP_OFF);
+        for (let i = 0; i < n; i++)
+          place(i, cars[i], cars[i].x, cars[i].y, cars[i].heading, LAMP_OFF);
         bodies.count = wheels.count = lamps.count = n;
         lastCars = cars;
         lastCount = n;
@@ -157,10 +166,11 @@ export function createCarRenderer(max: number): CarRenderer {
       } else if (lastDriving >= 0 && lastDriving !== driving && lastDriving < n) {
         // just got out: that car stands where the game left it
         const c = cars[lastDriving];
-        place(lastDriving, c.x, c.y, c.heading, LAMP_OFF);
+        place(lastDriving, c, c.x, c.y, c.heading, LAMP_OFF);
       }
       if (driving >= 0 && driving < n) {
-        place(driving, x, y, heading, lit ? LAMP_ON : LAMP_OFF);
+        const c = cars[driving];
+        place(driving, c, x, y, heading, lit && !wrecked(c) ? LAMP_ON : LAMP_OFF);
       }
       lastDriving = driving;
       flush();

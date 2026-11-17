@@ -91,7 +91,7 @@ describe('sky palette', () => {
     expect(skyPalette(-18).exposure).toBeGreaterThan(1.5);
     expect(skyPalette(65).exposure).toBe(1);
     // and even the middle of the night has real ambient light
-    expect(skyPalette(-18).hemiIntensity).toBeGreaterThan(1.5);
+    expect(skyPalette(-18).hemiIntensity).toBeGreaterThan(1);
   });
 
   it('changes smoothly and keeps every colour in range', () => {

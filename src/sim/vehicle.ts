@@ -4,9 +4,8 @@
 // A car is a circle for collisions (a compromise for a body twice as long as it is wide, but a body
 // that slides along walls and never crosses one, with the same `moveCircle` everyone else uses). It
 // steers like a car: the heading turns with speed, so it cannot spin on the spot, and it is much
-// faster on a road than off one. Hitting a wall costs speed, and a hard crash hurts the driver. Zombies
-// in the way are run over. The car itself does not break: the engine is loud and the tank is finite,
-// and that is what ends a drive.
+// faster on a road than off one. Hitting a wall costs speed, and the car some of its condition; a hard
+// crash hurts the driver. Zombies in the way are run over. The engine is loud, and the tank is finite.
 
 import { moveCircleLong, type Colliders } from './colliders';
 import { OCC_BRIDGE, OCC_ROAD, occupancyAt } from './grid';
@@ -34,8 +33,12 @@ export const CAR = {
   /** Tank, 0 to 1: full and flat out it lasts this many seconds. Cars are found part full. */
   tankSeconds: 420,
   fuelFound: [0.25, 0.9] as const,
-  /** A collision that takes more than this off the speed (m/s) counts as a crash; beyond `hurtSpeed` the driver is hurt. */
+  /** Condition 0 to 100: at zero the car is wrecked. */
+  hp: 100,
+  /** A collision that takes more than this off the speed (m/s) counts as a crash... */
   crashSpeed: 3,
+  /** ...and costs this much condition per m/s lost beyond it; beyond `hurtSpeed` the driver is hurt too. */
+  crashWear: 1.2,
   hurtSpeed: 9,
   crashHurt: 2.5,
   crashNoise: 45,
@@ -44,10 +47,13 @@ export const CAR = {
   hitDamage: 18,
   hitShove: 0.7,
   hitStun: 1.2,
-  /** What each body struck costs the car in speed (m/s). */
+  /** What each body struck costs the car: speed (m/s) and condition (a car takes a few hundred). */
   hitSlow: 0.5,
-  /** Inside, this share of a zombie's blow lands on the bodywork instead of you. */
+  hitWear: 0.35,
+  /** Inside, this share of a zombie's blow lands on the car instead of you (none once it is wrecked)... */
   shield: 0.8,
+  /** ...and only this much of what lands on the car wears it (zombies pound a long time before it gives). */
+  blowWear: 0.15,
   /** How far the engine is heard, idling and flat out, and how often the noise is made. */
   noiseIdle: 12,
   noiseTop: 60,
@@ -74,6 +80,8 @@ export interface Car {
   speed: number;
   /** 0 to 1. */
   fuel: number;
+  /** 0 to 100: at zero it is wrecked and will not go. */
+  hp: number;
 }
 
 /** What the survivor asks of the car: a direction to go in (city space, any length, capped at 1). */
@@ -92,8 +100,12 @@ export interface DriveResult {
   running: boolean;
 }
 
-export function createCar(x: number, y: number, heading: number, fuel = 1): Car {
-  return { x, y, heading, speed: 0, fuel };
+export function createCar(x: number, y: number, heading: number, fuel = 1, hp = CAR.hp): Car {
+  return { x, y, heading, speed: 0, fuel, hp };
+}
+
+export function wrecked(car: Car): boolean {
+  return car.hp <= 0;
 }
 
 /** Whether a point is on a road (or a bridge): the car is in its element here. */
@@ -112,8 +124,8 @@ export function stepCar(
   dt: number,
 ): DriveResult {
   const clamp1 = (v: number): number => Math.max(-1, Math.min(1, v));
-  const able = car.fuel > 0;
-  // the pedal and the wheel: an empty car answers to neither
+  const able = !wrecked(car) && car.fuel > 0;
+  // the pedal and the wheel: a wrecked or empty car answers to neither
   const throttle = able && Math.abs(input.throttle) > 0.05 ? clamp1(input.throttle) : 0;
   const steer = Math.abs(input.steer) > 0.05 ? clamp1(input.steer) : 0;
   const pressing = throttle !== 0;

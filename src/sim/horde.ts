@@ -99,6 +99,8 @@ export interface Noise {
   radius: number;
   /** Seconds left. */
   ttl: number;
+  /** Frightening to people (gunfire, a crash): they run from it. An engine or footsteps are not. */
+  alarm?: boolean;
 }
 
 /**

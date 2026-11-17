@@ -12,6 +12,7 @@
 // Pure and seeded: no DOM, no fetching.
 
 import {
+  copyStash,
   countPopulation,
   createGame,
   GAME,
@@ -377,8 +378,9 @@ export function migrateGame(
   g.ammo = old.ammo;
   g.reserve = old.reserve;
   g.hasShotgun = old.hasShotgun;
+  g.hasRifle = old.hasRifle;
   g.food = old.food;
-  g.stash = { ...old.stash };
+  g.stash = copyStash(old.stash);
   g.reloading = old.reloading;
   g.fireCooldown = old.fireCooldown;
   g.shoveCooldown = old.shoveCooldown;

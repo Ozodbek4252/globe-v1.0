@@ -90,7 +90,7 @@ describe('saving and loading', () => {
     g.weapon = 'shotgun';
     g.ammo = 4;
     g.reserve = 9;
-    g.stash = { ammo: 11, reserve: 30 };
+    g.stash.pistol = { ammo: 11, reserve: 30 };
     g.pickups[0].taken = true;
     g.radarOn = true;
     g.used[0] = true;
@@ -102,7 +102,7 @@ describe('saving and loading', () => {
     expect(loaded.hasShotgun).toBe(true);
     expect(loaded.weapon).toBe('shotgun');
     expect([loaded.ammo, loaded.reserve]).toEqual([4, 9]);
-    expect(loaded.stash).toEqual({ ammo: 11, reserve: 30 });
+    expect(loaded.stash.pistol).toEqual({ ammo: 11, reserve: 30 });
     expect(loaded.pickups[0].taken).toBe(true);
     expect(loaded.radarOn).toBe(true);
     expect(loaded.used[0]).toBe(true);

@@ -5,19 +5,22 @@
 
 import type { Rng } from '../lib/rng';
 import {
+  copyStash,
   countPopulation,
   createGame,
+  emptyStash,
   type GameOptions,
   type GameState,
   type GameStats,
   type GameStatus,
   type GameWorld,
   type Pickup,
+  type Stash,
   type WeaponName,
 } from './game';
 import type { Noise } from './horde';
 import type { PlayerState } from './player';
-import type { Car } from './vehicle';
+import { CAR, type Car } from './vehicle';
 import type { LedgerEntry } from './window';
 
 /** The arrays and counters of one of the in-place structures (the horde, the people, the buildings). */
@@ -38,8 +41,11 @@ export interface SavedGame {
     ammo: number;
     reserve: number;
     hasShotgun: boolean;
+    /** Absent in games saved before there was a rifle. */
+    hasRifle?: boolean;
     food: number;
-    stash: { ammo: number; reserve: number };
+    /** Each gun's magazine and spare rounds; a save from when there were two guns has just the other one's. */
+    stash: Stash | { ammo: number; reserve: number };
     reloading: number;
     fireCooldown: number;
     shoveCooldown: number;
@@ -123,8 +129,9 @@ export function saveGame(g: GameState, options: GameOptions): SavedGame {
       ammo: g.ammo,
       reserve: g.reserve,
       hasShotgun: g.hasShotgun,
+      hasRifle: g.hasRifle,
       food: g.food,
-      stash: { ...g.stash },
+      stash: copyStash(g.stash),
       reloading: g.reloading,
       fireCooldown: g.fireCooldown,
       shoveCooldown: g.shoveCooldown,
@@ -183,8 +190,14 @@ export function loadGame(world: GameWorld, saved: SavedGame): GameState {
   g.ammo = s.ammo;
   g.reserve = s.reserve;
   g.hasShotgun = s.hasShotgun;
+  g.hasRifle = s.hasRifle ?? false;
   g.food = s.food;
-  g.stash = { ...s.stash };
+  if ('pistol' in s.stash) g.stash = copyStash(s.stash);
+  else {
+    // two guns: what was stashed belonged to the one not in hand
+    g.stash = emptyStash();
+    g.stash[s.weapon === 'pistol' ? 'shotgun' : 'pistol'] = { ...s.stash };
+  }
   g.reloading = s.reloading;
   g.fireCooldown = s.fireCooldown;
   g.shoveCooldown = s.shoveCooldown;
@@ -202,16 +215,8 @@ export function loadGame(world: GameWorld, saved: SavedGame): GameState {
   g.breached = [...s.breached];
   g.doorEventTimer = s.doorEventTimer;
   // (a game saved before there were cars keeps the ones just parked for it)
-  if (s.cars) {
-    // (only what a car is now: a save from before may carry fields since dropped)
-    g.cars = s.cars.map((c) => ({
-      x: c.x,
-      y: c.y,
-      heading: c.heading,
-      speed: c.speed,
-      fuel: c.fuel,
-    }));
-  }
+  // (a save from a build whose cars could not break has no condition: as good as new)
+  if (s.cars) g.cars = s.cars.map((c) => ({ ...c, hp: c.hp ?? CAR.hp }));
   g.driving = s.cars ? (s.driving ?? -1) : -1;
   g.stats = { ...s.stats };
   g.rng.state = s.rng;

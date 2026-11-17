@@ -89,6 +89,7 @@ let stopZoom: (() => void) | null = null;
  */
 function linkOptions(): {
   hour?: number;
+  moon?: number;
   view?: CityViewpoint;
   camera?: CameraMode;
   player?: { x: number; y: number };
@@ -99,6 +100,8 @@ function linkOptions(): {
   const out: ReturnType<typeof linkOptions> = {};
   const h = Number(q.get('hour'));
   if (q.has('hour') && Number.isFinite(h)) out.hour = Math.min(24, Math.max(0, h));
+  const m = Number(q.get('moon'));
+  if (q.has('moon') && Number.isFinite(m)) out.moon = Math.min(1, Math.max(0, m));
   const v = (q.get('view') ?? '').split(',').map(Number);
   if (v.length === 5 && v.every(Number.isFinite)) {
     out.view = { x: v[0], y: v[1], yaw: v[2], pitch: v[3], distance: v[4] };
@@ -229,6 +232,7 @@ onMounted(async () => {
     if (link.hour !== undefined) hour.value = link.hour;
     const created = await createCityScene(host.value, data, {
       hour: hour.value,
+      moon: link.moon,
       view: link.view,
       camera: link.camera,
       player: link.player,
@@ -416,7 +420,9 @@ onBeforeUnmount(() => {
           >{{ clock(hour) }} · sun {{ sunElevation >= 0 ? '+' : '' }}{{ sunElevation }}°</output
         >
         <span v-if="player && player.night > 0.5" class="city-night" role="status"
-          >Night: the dead are restless</span
+          >Night: the dead are restless{{
+            player.moon < 0.15 ? ' · no moon' : player.moon > 0.85 ? ' · full moon' : ''
+          }}</span
         >
         <span v-if="player?.loading" class="city-loading-next" role="status"
           >Loading the next part of the city…</span
@@ -475,6 +481,18 @@ onBeforeUnmount(() => {
             <i :style="{ width: Math.round(player.car.fuel * 100) + '%' }"></i>
             <span>{{ player.car.fuel <= 0 ? 'Out of fuel' : 'Fuel' }}</span>
           </span>
+          <span
+            class="car-body"
+            :class="{ low: player.car.condition < 0.3, wrecked: player.car.wrecked }"
+            role="progressbar"
+            aria-label="Car condition"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            :aria-valuenow="Math.round(player.car.condition * 100)"
+          >
+            <i :style="{ width: Math.round(player.car.condition * 100) + '%' }"></i>
+            <span>{{ player.car.wrecked ? 'Wrecked' : 'Car' }}</span>
+          </span>
         </div>
         <div
           v-if="player.camera === 'follow' && !player.car"
@@ -498,7 +516,7 @@ onBeforeUnmount(() => {
           <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk &nbsp; <kbd>Shift</kbd> run</li>
           <li>
             <kbd>Mouse</kbd> aim &nbsp; <kbd>Click</kbd> fire &nbsp; <kbd>R</kbd> reload &nbsp;
-            <kbd>1</kbd><kbd>2</kbd> gun
+            <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> gun
           </li>
           <li>
             <kbd>Space</kbd> shove &nbsp; <kbd>F</kbd> door, or get in a car &nbsp;
@@ -855,7 +873,8 @@ onBeforeUnmount(() => {
   font-size: 15px;
   font-weight: 600;
 }
-.car-fuel {
+.car-fuel,
+.car-body {
   position: relative;
   flex: 1 1 0;
   height: 16px;
@@ -865,19 +884,27 @@ onBeforeUnmount(() => {
   overflow: hidden;
   backdrop-filter: blur(6px);
 }
-.car-fuel i {
+.car-fuel i,
+.car-body i {
   position: absolute;
   inset: 0 auto 0 0;
   transition: width 0.2s linear;
+}
+.car-fuel i {
   background: linear-gradient(90deg, #6a8fcf, #9fc2ff);
 }
 .car-fuel.low i {
   background: #c98a2a;
 }
+.car-body i {
+  background: linear-gradient(90deg, #7b8f7a, #a9c3a4);
+}
+.car-body.low i,
 .car-fuel.empty i {
   background: #c9574d;
 }
-.car-fuel span {
+.car-fuel span,
+.car-body span {
   position: absolute;
   inset: 0;
   display: grid;

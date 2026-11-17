@@ -43,6 +43,11 @@ function later(fn: () => void, ms: number): void {
 }
 
 const clock = fmtClock;
+const GUN_NAMES: Record<PlayerStatus['weapon'], string> = {
+  pistol: 'Pistol',
+  shotgun: 'Shotgun',
+  rifle: 'Rifle',
+};
 const plural = (n: number, one: string, many = one + 's'): string => `${n} ${n === 1 ? one : many}`;
 const count = (n: number): string => n.toLocaleString('en-US');
 
@@ -71,11 +76,11 @@ function push(n: GameNotice): void {
         .filter(Boolean)
         .join(' · ');
       const text = n.shotgun
-        ? `Shotgun found · press 2${got ? ' · ' + got : ''}`
+        ? `Shotgun and rifle found · press 2 or 3${got ? ' · ' + got : ''}`
         : got || 'Nothing here you can use right now';
       toast.value = { id, text };
       announcement.value = n.shotgun
-        ? `${n.place}: a shotgun and shells. Press 2 to take it out.`
+        ? `${n.place}: a shotgun and a rifle, with rounds. Press 2 or 3 to take one out.`
         : got
           ? `${n.place}: ${got}.`
           : `${n.place}: nothing you can use right now.`;
@@ -131,6 +136,16 @@ function push(n: GameNotice): void {
         };
         announcement.value = 'The car is out of fuel.';
         later(() => banner.value?.id === id && (banner.value = null), 4500);
+      } else if (n.what === 'wrecked') {
+        banner.value = {
+          id,
+          tone: 'danger',
+          title: 'The car is wrecked',
+          sub: 'It will not go, and it will not keep them out. Get out.',
+          angle: null,
+        };
+        announcement.value = 'The car is wrecked. Get out.';
+        later(() => banner.value?.id === id && (banner.value = null), 5000);
       }
       break;
     case 'restart':
@@ -270,9 +285,11 @@ const accuracy = computed(() =>
 
       <div v-if="player.camera === 'follow'" class="hud-ammo" :class="{ low: ammoLow }">
         <span class="hud-label"
-          >{{ player.weapon === 'shotgun' ? 'Shotgun' : 'Pistol'
-          }}<template v-if="player.hasShotgun">
-            · <kbd class="hud-weapon-key">1</kbd><kbd class="hud-weapon-key">2</kbd></template
+          >{{ GUN_NAMES[player.weapon]
+          }}<template v-if="player.hasShotgun || player.hasRifle">
+            · <kbd class="hud-weapon-key">1</kbd
+            ><kbd v-if="player.hasShotgun" class="hud-weapon-key">2</kbd
+            ><kbd v-if="player.hasRifle" class="hud-weapon-key">3</kbd></template
           ></span
         >
         <span class="hud-rounds"

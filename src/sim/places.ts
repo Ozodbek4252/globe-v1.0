@@ -129,7 +129,7 @@ interface Candidate {
 }
 
 /** How many of each to choose. */
-const WANTED = { shelter: 4, supplies: 8 } as const;
+const WANTED = { shelter: 12, supplies: 10 } as const;
 
 /** How far from the start (metres, as the door is from it) each kind may be: lowest and highest. */
 const WALK = {
@@ -255,16 +255,18 @@ export function choosePlaces(
       ),
   );
 
+  // the other shelters: big, solid buildings spread around the start
   while (places.filter((p) => p.kind === 'shelter').length < WANTED.shelter) {
     const found = best(
       (c) => c.area >= 700,
-      (_, d) => within(d, WALK.shelterFar) && apart(d, 150, 'shelter') && apart(d, 60),
+      (_, d) => within(d, WALK.shelterFar) && apart(d, 90, 'shelter') && apart(d, 60),
       (c, d) => (named(c) * civic(c) * Math.min(c.area, 6000)) / (200 + fromStart(d)),
     );
     if (!add('shelter', found)) break;
   }
 
-  // supplies: one within a short walk of the start, then shops and clinics around it
+  // supplies: one within a short walk of the start, then shops and clinics around it (near a shelter
+  // is fine: there are many shelters now, and a shop next to one is a shop still)
   const shop = (c: Candidate): boolean => ['commercial', 'civic'].includes(c.building.kind);
   add(
     'supplies',
@@ -277,7 +279,7 @@ export function choosePlaces(
   while (places.filter((p) => p.kind === 'supplies').length < WANTED.supplies) {
     const found = best(
       (c) => (shop(c) || !!c.building.name) && c.area >= 100,
-      (_, d) => within(d, [0, WALK.suppliesMax]) && apart(d, 90),
+      (_, d) => within(d, [0, WALK.suppliesMax]) && apart(d, 90, 'supplies') && apart(d, 40),
       (c) => named(c) * c.area,
     );
     if (!add('supplies', found)) break;

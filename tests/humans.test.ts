@@ -132,7 +132,7 @@ describe('people in the street', () => {
     t.ctx.noises = [{ x: 15, y: 0, radius: 25, ttl: 2 }];
     t.run(1);
     expect(t.humans.state[i]).toBe(HState.WALK);
-    t.ctx.noises = [{ x: 15, y: 0, radius: 75, ttl: 2 }];
+    t.ctx.noises = [{ x: 15, y: 0, radius: 75, ttl: 2, alarm: true }];
     t.run(2);
     expect(t.humans.state[i]).toBe(HState.FLEE);
     expect(t.humans.x[i]).toBeLessThan(-3);

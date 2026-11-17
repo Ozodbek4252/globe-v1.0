@@ -179,7 +179,7 @@ describe('the pistol', () => {
     expect(g.reloading).toBeGreaterThan(0);
     run({}, 1.7);
     expect(g.ammo).toBe(15);
-    expect(g.reserve).toBe(30);
+    expect(g.reserve).toBe(GAME.weapon.reserve - 15);
     expect(g.reloading).toBe(0);
     expect(count('reload')).toBe(1);
     expect(count('reloaded')).toBe(1);
@@ -204,7 +204,7 @@ describe('the pistol', () => {
     expect(g.ammo).toBe(12);
     run({ reload: true }, 2);
     expect(g.ammo).toBe(15);
-    expect(g.reserve).toBe(45 - 3);
+    expect(g.reserve).toBe(GAME.weapon.reserve - 3);
     g.ammo = 5;
     g.reserve = 0;
     run({ reload: true }, 0.2); // nothing in reserve
@@ -310,7 +310,7 @@ describe('supplies and health', () => {
     run({}, 0.1);
     expect(g.pickups[0].taken).toBe(true);
     expect(g.pickups[1].taken).toBe(true);
-    expect(g.reserve).toBe(45 + 2 * GAME.pickups.ammoAmount);
+    expect(g.reserve).toBe(GAME.weapon.reserve + 2 * GAME.pickups.ammoAmount);
 
     g.pickups = [{ x: 0, y: 0.5, kind: 'ammo', taken: false }];
     g.reserve = GAME.weapon.reserveCap;
@@ -546,11 +546,13 @@ describe('places', () => {
     run({ interact: true }, DT);
     expect(g.hasShotgun).toBe(true);
     expect(g.reserve).toBe(GAME.loot.ammo); // pistol rounds
-    expect(g.stash).toEqual({ ammo: GAME.shotgun.mag, reserve: GAME.shotgun.reserve });
+    expect(g.stash.shotgun).toEqual({ ammo: GAME.shotgun.mag, reserve: GAME.shotgun.reserve });
+    expect(g.hasRifle).toBe(true);
+    expect(g.stash.rifle).toEqual({ ammo: GAME.rifle.mag, reserve: GAME.rifle.reserve });
     expect(events.find((e) => e.type === 'loot')).toMatchObject({ armory: true, shotgun: true });
     expect(g.used[place('armory').id]).toBe(true);
     run({ interact: true }, DT);
-    expect(g.stash.reserve).toBe(GAME.shotgun.reserve); // not a second helping
+    expect(g.stash.shotgun.reserve).toBe(GAME.shotgun.reserve); // not a second helping
   });
 
   it('is shut to the dead', () => {
@@ -741,15 +743,15 @@ describe('the shotgun', () => {
     expect(g.weapon).toBe('shotgun');
     expect(g.ammo).toBe(GAME.shotgun.mag);
     expect(g.reserve).toBe(GAME.shotgun.reserve);
-    expect(g.stash.ammo).toBe(GAME.weapon.mag); // the pistol, as it was
+    expect(g.stash.pistol.ammo).toBe(GAME.weapon.mag); // the pistol, as it was
     expect(count('weapon')).toBe(1);
     g.ammo = 3;
-    g.stash.ammo = 9;
-    g.stash.reserve = 77;
+    g.stash.pistol.ammo = 9;
+    g.stash.pistol.reserve = 77;
     run({ weapon: 1 }, 0.6);
     expect(g.weapon).toBe('pistol');
     expect([g.ammo, g.reserve]).toEqual([9, 77]);
-    expect(g.stash.ammo).toBe(3);
+    expect(g.stash.shotgun.ammo).toBe(3);
     run({ weapon: 1 }, 0.1); // already in hand: nothing happens
     expect(count('weapon')).toBe(2);
   });
@@ -839,11 +841,11 @@ describe('the shotgun', () => {
 
   it('does not use up pistol rounds, and ground ammunition still goes to the pistol', () => {
     const { g, run } = armed();
-    const stash = g.stash.reserve;
+    const stash = g.stash.pistol.reserve;
     g.pickups = [{ x: 0.5, y: 0, kind: 'ammo', taken: false }];
     run({}, 0.2);
     expect(g.pickups[0].taken).toBe(true);
-    expect(g.stash.reserve).toBe(stash + GAME.pickups.ammoAmount); // the pistol's, in the stash
+    expect(g.stash.pistol.reserve).toBe(stash + GAME.pickups.ammoAmount); // the pistol's, in the stash
     expect(g.reserve).toBeLessThanOrEqual(GAME.shotgun.reserve); // the shotgun's, untouched
   });
 });
