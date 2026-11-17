@@ -231,8 +231,9 @@ behind a door works, but it does not win the game.
   about 1.25 and run at about 4.1, so a walker never catches them in the open and a runner always does.
   Zombies hanging on slow you down, and they never stand in each other's space: a crowd spreads out.
 - **Cars.** Cars stand parked along the real roads (a few dozen in view, each with some fuel in the
-  tank). Walk up to one and press `F` to get in; `W A S D` then steer it where you point (a car turns
-  only while it rolls, and backs up if you point behind it), `F` gets you out. On a road it does
+  tank). Walk up to one and press `F` to get in; then `W` is the pedal, `S` the brake (and reverse,
+  once stopped), `A` and `D` the wheel, as in any driving game (a car turns only while it rolls);
+  `F` gets you out. On a road it does
   nearly 80 km/h, off one about 30; it slides along walls and never crosses one, and a hard crash
   costs the car (and above about 32 km/h, you) something. Zombies in the way are run down, which
   wears the car a little each time. Inside, most of a blow lands on the bodywork instead of you, until

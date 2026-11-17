@@ -9,7 +9,6 @@
 
 import { moveCircleLong, type Colliders } from './colliders';
 import { OCC_BRIDGE, OCC_ROAD, occupancyAt } from './grid';
-import { angleDelta } from './player';
 import { nextFloat, nextRange, type Rng } from '../lib/rng';
 import { validSpot, type GameWorld } from './world';
 
@@ -31,8 +30,6 @@ export const CAR = {
   /** Steering: the yaw rate is speed / wheelbase * tan(steer), as for a real car. */
   wheelbase: 2.6,
   maxSteer: 0.6,
-  /** Steering sideways with no forward pressure still rolls the car on, at this share of the pedal. */
-  crawl: 0.3,
   /** Tank, 0 to 1: full and flat out it lasts this many seconds. Cars are found part full. */
   tankSeconds: 420,
   fuelFound: [0.25, 0.9] as const,
@@ -82,8 +79,10 @@ export interface Car {
 
 /** What the survivor asks of the car: a direction to go in (city space, any length, capped at 1). */
 export interface DriveInput {
-  moveX: number;
-  moveY: number;
+  /** The pedal: 1 flat out forward, -1 the brake (and, once stopped, reverse), 0 coasting. */
+  throttle: number;
+  /** The wheel: 1 full left, -1 full right. */
+  steer: number;
 }
 
 /** What happened in a step of driving: the game turns it into damage, noise and events. */
@@ -108,9 +107,8 @@ export function onRoad(colliders: Colliders, x: number, y: number): boolean {
 }
 
 /**
- * Drive the car by `dt` seconds (keep it small, ideally 1/60), in place. Steering is "go that way":
- * the car turns toward the direction asked for and rolls on; a direction behind it brakes, then backs
- * up. Returns what the walls did.
+ * Drive the car by `dt` seconds (keep it small, ideally 1/60), in place: the pedal and the wheel as
+ * in any driving game. The brake pressed on a standing car backs it up. Returns what the walls did.
  */
 export function stepCar(
   car: Car,
@@ -118,29 +116,14 @@ export function stepCar(
   colliders: Colliders,
   dt: number,
 ): DriveResult {
-  const mag = Math.hypot(input.moveX, input.moveY);
-  const pressing = mag > 0.05 && !wrecked(car) && car.fuel > 0;
+  const clamp1 = (v: number): number => Math.max(-1, Math.min(1, v));
+  const able = !wrecked(car) && car.fuel > 0;
+  // the pedal and the wheel: a wrecked or empty car answers to neither
+  const throttle = able && Math.abs(input.throttle) > 0.05 ? clamp1(input.throttle) : 0;
+  const steer = Math.abs(input.steer) > 0.05 ? clamp1(input.steer) : 0;
+  const pressing = throttle !== 0;
   const road = onRoad(colliders, car.x, car.y);
   const top = road ? CAR.topRoad : CAR.topOff;
-
-  // the pedal and the wheel, from where the survivor wants to go
-  let throttle = 0; // -1 (backing up) to 1
-  let steer = 0; // -1 (right) to 1 (left)
-  if (pressing) {
-    const want = Math.atan2(input.moveY, input.moveX);
-    const ahead = angleDelta(car.heading, want); // how far round the wanted direction is
-    const behind = Math.abs(ahead) > Math.PI * 0.68; // more than about 120 degrees round: back up
-    const push = Math.min(1, mag);
-    if (!behind) {
-      throttle = push * Math.max(CAR.crawl, Math.cos(ahead));
-      steer = Math.max(-1, Math.min(1, ahead * 2.5));
-    } else {
-      throttle = -push;
-      // in reverse the back swings the other way, so turn the wheel against the wanted direction
-      const back = angleDelta(car.heading, want + Math.PI);
-      steer = -Math.max(-1, Math.min(1, back * 2.5));
-    }
-  }
 
   // speed: the pedal asks for a share of the top speed here, and the car works toward it
   let v = car.speed;

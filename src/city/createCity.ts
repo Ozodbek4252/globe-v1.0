@@ -291,6 +291,8 @@ export interface CityDebug {
   };
   /** The cars: how many there are, which one is being driven, and the nearest one's distance. */
   cars(): { count: number; driving: number; nearest: number; onRoad: number };
+  /** The ledger of a tiled city: how many entries, how many hold a number that is not one, and one such entry. */
+  ledger(): { entries: number; broken: number; sample: unknown };
   /** The numbers worth checking. */
   snapshot(): {
     status: GameStatus;
@@ -783,10 +785,15 @@ export async function createCityScene(
   // game has ever held (buildings keep their state when their tile is not loaded)
   const tiled = options.tiled ?? null;
   let origin: [number, number] = data.origin ?? [0, 0];
+  let repaired = 0;
   const ledger: Ledger =
     isSavedGame(setup.resume) && setup.resume.city
-      ? readLedger(setup.resume.city.ledger, setup.resume.game.tick)
+      ? readLedger(setup.resume.city.ledger, setup.resume.game.tick, (id, entry, fields) => {
+          // a save from an older build: say what was missing, once, so the cause can be found
+          if (!repaired++) console.warn('ledger entry repaired', id, fields.join(','), entry);
+        })
       : new Map<number, LedgerEntry>();
+  if (repaired > 0) console.warn(`${repaired} ledger entries repaired on load`);
   let seed = setup.seed ?? Math.floor(Math.random() * 0xffffffff);
   // the day: it starts at this hour and goes by as you play, an hour a minute; the game needs to know
   // when the sun rises and sets over this place, since that is when the dead are at their worst
@@ -1364,6 +1371,9 @@ export async function createCityScene(
     const input: GameInput = {
       moveX: walking ? forward * axes.forward[0] + sideways * axes.right[0] : 0,
       moveY: walking ? -(forward * axes.forward[1] + sideways * axes.right[1]) : 0,
+      // at the wheel the same keys are the pedal and the wheel: W forward, S brake, A left, D right
+      throttle: walking ? forward : 0,
+      steer: walking ? -sideways : 0,
       sprint: keys.has('shift'),
       aim,
       fire: walking && triggerHeld,
@@ -1817,6 +1827,19 @@ export async function createCityScene(
           },
           freeze(on) {
             debugFrozen = on;
+          },
+          ledger() {
+            let broken = 0;
+            let sample: unknown = null;
+            for (const [id, e] of ledger) {
+              const bad = Object.values(e).some(
+                (v) => typeof v === 'number' && !Number.isFinite(v),
+              );
+              if (!bad) continue;
+              broken++;
+              sample ??= { id, ...e };
+            }
+            return { entries: ledger.size, broken, sample };
           },
           probe() {
             return {

@@ -113,8 +113,9 @@ function push(n: GameNotice): void {
       break;
     case 'car':
       if (n.what === 'enter') {
-        toast.value = { id, text: 'At the wheel · W A S D drive · F get out' };
-        announcement.value = 'In the car. Steer where you want to go; F to get out.';
+        toast.value = { id, text: 'At the wheel · W S pedal · A D steer · F get out' };
+        announcement.value =
+          'In the car. W forward, S brake and reverse, A and D steer; F to get out.';
         later(() => toast.value?.id === id && (toast.value = null), 3200);
       } else if (n.what === 'crash') {
         toast.value = { id, text: 'Crash' };

@@ -69,6 +69,8 @@ describe.each(places.map((p) => [p.id, p] as const))('playing in %s', (id, place
       const input: GameInput = {
         moveX: Math.cos(a),
         moveY: Math.sin(a),
+        throttle: 0,
+        steer: 0,
         sprint: Math.floor(time / 4) % 3 === 0,
         aim: [g.player.x + Math.cos(a + 0.6) * 15, g.player.y + Math.sin(a + 0.6) * 15],
         fire: Math.floor(time) % 2 === 0,

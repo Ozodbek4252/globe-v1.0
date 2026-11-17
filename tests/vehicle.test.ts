@@ -38,18 +38,27 @@ const HOUSES: PlaceBuilding[] = [
 
 const QUIET: Partial<GameOptions> = { population: false, patients: 0, clumps: 0 };
 
+/** Hold the pedal (`throttle`: W is 1, S is -1) and the wheel (`steer`: A is 1, D is -1) for a while. */
 function drive(
   g: GameState,
   world: GameWorld,
   seconds: number,
-  moveX: number,
-  moveY: number,
+  throttle: number,
+  steer: number,
   events?: GameEvent[],
 ): void {
   for (let s = 0; s < Math.round(seconds / DT); s++) {
-    stepGame(g, { ...NO_INPUT, moveX, moveY }, world, DT);
+    stepGame(g, { ...NO_INPUT, throttle, steer }, world, DT);
     const got = drainEvents(g);
     if (events) events.push(...got);
+  }
+}
+
+/** Walk (on foot) in a direction for a while. */
+function walk(g: GameState, world: GameWorld, seconds: number, moveX: number, moveY: number): void {
+  for (let s = 0; s < Math.round(seconds / DT); s++) {
+    stepGame(g, { ...NO_INPUT, moveX, moveY }, world, DT);
+    drainEvents(g);
   }
 }
 
@@ -160,7 +169,7 @@ describe('at the wheel', () => {
     const car = g.cars.length - 1;
     getIn(g, world, car);
     const heading = g.cars[car].heading;
-    drive(g, world, 2, 0, 0); // no pedal: it does not move or turn
+    drive(g, world, 2, 0, 1); // the wheel alone, no pedal: it neither moves nor turns
     expect(g.cars[car].speed).toBe(0);
     expect(g.cars[car].heading).toBe(heading);
     drive(g, world, 8, 1, 0);
@@ -168,21 +177,29 @@ describe('at the wheel', () => {
     expect(g.cars[car].speed).toBeLessThanOrEqual(CAR.topOff + 1e-6);
   });
 
-  it('turns toward where you point, and backs up when you point behind it', () => {
+  it('steers left with A and right with D while rolling, and S brakes, then backs up', () => {
     const { g, world } = town(HOUSES, QUIET, 800, [road(-700, 700)]);
     g.cars.push({ x: -400, y: 0, heading: 0, speed: 0, fuel: 1, hp: CAR.hp });
     const car = g.cars.length - 1;
     getIn(g, world, car);
-    drive(g, world, 4, 0.3, 1); // mostly north
     const c = g.cars[car];
-    expect(c.heading).toBeGreaterThan(0.6);
-    expect(c.y).toBeGreaterThan(5);
+    drive(g, world, 2, 1, 1); // W and A: forward, turning left (counter-clockwise, toward north)
+    expect(c.heading).toBeGreaterThan(0.4);
+    expect(c.y).toBeGreaterThan(1);
     expect(c.speed).toBeGreaterThan(0);
-    // now straight back the way it came: it brakes, then reverses
-    const h = c.heading;
-    drive(g, world, 4, -Math.cos(h), -Math.sin(h));
-    expect(c.speed).toBeLessThan(0);
+    const left = c.heading;
+    drive(g, world, 2, 1, -1); // W and D: back round to the right
+    expect(c.heading).toBeLessThan(left);
+    // S: the brakes, then reverse
+    drive(g, world, 1, -1, 0);
+    expect(c.speed).toBeLessThanOrEqual(0);
+    drive(g, world, 3, -1, 0);
+    expect(c.speed).toBeLessThan(-1);
     expect(c.speed).toBeGreaterThanOrEqual(-CAR.reverse - 1e-6);
+    // backing up with the wheel turned swings the nose the other way, as in a real car
+    const h = c.heading;
+    drive(g, world, 1, -1, 1);
+    expect(c.heading).toBeLessThan(h);
   });
 
   it('is stopped by a wall, never crosses one, and a hard crash costs the car and the driver', () => {
@@ -194,7 +211,7 @@ describe('at the wheel', () => {
     const events: GameEvent[] = [];
     let top = 0;
     for (let s = 0; s < 60 * 12; s++) {
-      stepGame(g, { ...NO_INPUT, moveX: 1, moveY: 0 }, world, DT);
+      stepGame(g, { ...NO_INPUT, throttle: 1 }, world, DT);
       events.push(...drainEvents(g));
       const c = g.cars[car];
       top = Math.max(top, c.speed);
@@ -299,7 +316,7 @@ describe('at the wheel', () => {
     expect(d).toBeLessThan(CAR.length);
     expect(validSpot(world, g.player.x, g.player.y, PLAYER.radius)).toBe(true);
     // on foot again: walking works, and the car is still there to get back into
-    drive(g, world, 2, 0, 1);
+    walk(g, world, 2, 0, 1);
     expect(g.player.y).toBeGreaterThan(c.y + 4);
     expect(g.cars[car]).toEqual(c);
   });
@@ -429,7 +446,7 @@ describe('the car on its own', () => {
       roads: [],
     });
     const car: Car = { x: 1, y: 2, heading: 0.3, speed: 0, fuel: 1, hp: CAR.hp };
-    const r = stepCar(car, { moveX: 0, moveY: 0 }, colliders, DT);
+    const r = stepCar(car, { throttle: 0, steer: 0 }, colliders, DT);
     expect(car).toEqual({ x: 1, y: 2, heading: 0.3, speed: 0, fuel: 1, hp: CAR.hp });
     expect(r).toEqual({ crash: 0, running: false });
   });

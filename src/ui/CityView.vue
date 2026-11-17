@@ -510,7 +510,8 @@ onBeforeUnmount(() => {
             <kbd>1</kbd><kbd>2</kbd> gun
           </li>
           <li>
-            <kbd>Space</kbd> shove &nbsp; <kbd>F</kbd> use a door, get in or out of a car &nbsp;
+            <kbd>Space</kbd> shove &nbsp; <kbd>F</kbd> use a door, get in or out of a car (then
+            <kbd>W</kbd><kbd>S</kbd> pedal, <kbd>A</kbd><kbd>D</kbd> steer) &nbsp;
             <kbd>L</kbd> flashlight
           </li>
           <li><kbd>Q</kbd><kbd>E</kbd> or right-drag: turn camera &nbsp; <kbd>Wheel</kbd> zoom</li>

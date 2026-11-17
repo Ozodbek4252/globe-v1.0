@@ -290,11 +290,16 @@ export interface GameInput {
   interact: boolean;
   /** Take out a gun: 1 the pistol, 2 the shotgun (once found); 0 for no change. Sent once per press. */
   weapon: 0 | 1 | 2;
+  /** At the wheel: the pedal (1 forward, -1 brake then reverse) and the wheel (1 left, -1 right), as the keys are pressed. */
+  throttle: number;
+  steer: number;
 }
 
 export const NO_INPUT: GameInput = {
   moveX: 0,
   moveY: 0,
+  throttle: 0,
+  steer: 0,
   sprint: false,
   aim: null,
   fire: false,
@@ -735,7 +740,7 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
     const act: GameInput = indoors
       ? { ...NO_INPUT, reload: input.reload, interact: input.interact }
       : driving
-        ? { ...NO_INPUT, moveX: input.moveX, moveY: input.moveY, interact: input.interact }
+        ? { ...NO_INPUT, throttle: input.throttle, steer: input.steer, interact: input.interact }
         : input;
 
     // the survivor
@@ -1399,7 +1404,7 @@ function drive(g: GameState, act: GameInput, world: GameWorld, dt: number): void
   const fuelBefore = car.fuel;
   const { crash, running } = stepCar(
     car,
-    { moveX: act.moveX, moveY: act.moveY },
+    { throttle: act.throttle, steer: act.steer },
     world.colliders,
     dt,
   );

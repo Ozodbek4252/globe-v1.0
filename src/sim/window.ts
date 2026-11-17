@@ -102,15 +102,37 @@ export function advanceEntry(e: LedgerEntry, tick: number, rng: Rng): void {
 export function readLedger(
   entries: readonly [number, Partial<LedgerEntry>][],
   tick: number,
+  onRepair?: (id: number, entry: Partial<LedgerEntry>, fields: string[]) => void,
 ): Ledger {
   const ledger: Ledger = new Map();
+  const blank = emptyEntry(tick);
   for (const [id, e] of entries) {
+    const bad: string[] = [];
+    const num = (key: keyof LedgerEntry, fallback: number): number => {
+      const v = e[key];
+      if (typeof v === 'number' && Number.isFinite(v)) return v;
+      bad.push(key);
+      return fallback;
+    };
+    const flag = (key: keyof LedgerEntry): boolean => {
+      const v = e[key];
+      if (typeof v === 'boolean') return v;
+      bad.push(key);
+      return false;
+    };
     ledger.set(id, {
-      ...emptyEntry(tick),
-      ...e,
-      roaming: Number.isFinite(e.roaming) ? (e.roaming as number) : 0,
-      tick: Number.isFinite(e.tick) ? (e.tick as number) : tick,
+      healthy: num('healthy', 0),
+      incubating: num('incubating', 0),
+      undead: num('undead', 0),
+      doorHp: num('doorHp', blank.doorHp),
+      open: flag('open'),
+      used: flag('used'),
+      breached: flag('breached'),
+      shelterDoor: num('shelterDoor', blank.shelterDoor),
+      roaming: num('roaming', 0),
+      tick: num('tick', tick),
     });
+    if (bad.length > 0) onRepair?.(id, e, bad);
   }
   return ledger;
 }
