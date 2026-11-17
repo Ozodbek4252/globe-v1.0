@@ -20,6 +20,7 @@ import {
   biteHuman,
   createHumans,
   HState,
+  HUMAN,
   spawnHuman,
   stepHumans,
   type HumanContext,
@@ -41,13 +42,13 @@ import {
   type Noise,
   type Targets,
 } from './horde';
+import { DAY, fear, nightness, outdoorShare, wrapHour } from './daylight';
 import { choosePlaces, PLACES, type Place, type PlaceBuilding } from './places';
 import {
   batter,
   biteInside,
   createOutbreak,
   indoorCounts,
-  POP,
   roundSeeded,
   seedOutbreak,
   stepOutbreak,
@@ -122,7 +123,7 @@ export const GAME = {
   },
   /** The most zombies on the streets at once, and people in the street (the rest are indoors, counted). */
   capacity: 4000,
-  streetPeople: 2500,
+  streetPeople: 4000,
   /** Zombies in the streets at the start. None: the outbreak starts indoors, somewhere far off. */
   clumps: 0,
   outbreak: {
@@ -318,6 +319,15 @@ export interface GameOptions {
   patients?: number;
   /** People per square kilometre to spread over the city, from a real-world figure. */
   density?: number;
+  /** The hour (local, 0-24) the game begins at. Default: `DAY.start`. */
+  startHour?: number;
+  /** False to leave the people where they are: nobody goes out or comes home (for tests). */
+  routine?: boolean;
+  /** False to stop the clock where it is (for tests and screenshots): no day and night. */
+  cycle?: boolean;
+  /** When the sun rises and sets over this place, in hours; they say when the night is. */
+  sunrise?: number;
+  sunset?: number;
 }
 
 export interface GameStats {
@@ -385,6 +395,18 @@ export interface GameState {
   humanContext: HumanContext;
   /** For each building, the shelter (a place id) it is, or -1. */
   shelterOf: Int16Array;
+  /** The hour of the day (local, 0-24): it moves on as you play. */
+  clock: number;
+  /** Whether people come and go through the day. */
+  routine: boolean;
+  /** Whether it moves on at all. */
+  cycle: boolean;
+  /** When the sun rises and sets here, and how dark it is now (0 day, 1 night). */
+  sunrise: number;
+  sunset: number;
+  night: number;
+  /** Where the next person sent home is looked for (so it is not always the same people). */
+  homeCursor: number;
   /** Seconds since the population was last counted. */
   countTimer: number;
   /** The radar is on, so the horde is visible. */
@@ -421,6 +443,9 @@ export function createGame(world: GameWorld, options: GameOptions): GameState {
   const flow = createFlowField(world.nav);
   updateFlow(flow, options.startX, options.startY);
   const half = world.colliders.half;
+  const startHour = wrapHour(options.startHour ?? DAY.start);
+  const sunrise = options.sunrise ?? DAY.sunrise;
+  const sunset = options.sunset ?? DAY.sunset;
 
   // The city's people: who lives where comes from the buildings, how many there are from a real density.
   const withPeople = options.population ?? true;
@@ -495,6 +520,13 @@ export function createGame(world: GameWorld, options: GameOptions): GameState {
     doorIndex,
     humanContext,
     shelterOf,
+    clock: startHour,
+    routine: options.routine ?? true,
+    cycle: options.cycle ?? true,
+    sunrise,
+    sunset,
+    night: nightness(startHour, sunrise, sunset),
+    homeCursor: 0,
     countTimer: 0,
     radarOn: false,
     inside: -1,
@@ -528,9 +560,10 @@ function turnZombie(horde: Horde, rng: Rng, x: number, y: number): void {
 /** The few percent of everyone who are out in the street at the start, each near their own door. */
 function scatterStreetPeople(g: GameState, world: GameWorld): void {
   const { outbreak: o, humans, rng } = g;
+  const share = outdoorShare(g.clock); // how many are out at this hour of the day
   for (let b = 0; b < o.count && humans.alive < humans.capacity; b++) {
     if (o.healthy[b] <= 0) continue;
-    const want = roundSeeded(o.healthy[b] * POP.outdoors, rng);
+    const want = roundSeeded(o.healthy[b] * share, rng);
     // a big block puts a crowd out, who spread further from its door than a few from a house
     const reach = 10 + 2.5 * Math.sqrt(want);
     for (let k = 0; k < want && humans.alive < humans.capacity; k++) {
@@ -653,6 +686,11 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
 
   if (playing) {
     g.time += dt;
+    // the day goes by: an hour for each minute of play (unless the clock is stopped)
+    if (g.cycle) {
+      g.clock = wrapHour(g.clock + (dt * DAY.hoursPerMinute) / 60);
+      g.night = nightness(g.clock, g.sunrise, g.sunset);
+    }
     g.sinceHurt += dt;
     g.fireCooldown = Math.max(0, g.fireCooldown - dt);
     g.shoveCooldown = Math.max(0, g.shoveCooldown - dt);
@@ -744,6 +782,7 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
       hidden: playing && g.inside >= 0,
       targets: g.targets,
       noises: g.noises,
+      night: g.night,
     },
     dt,
     g.tick,
@@ -767,8 +806,10 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
       seconds,
       g.rng,
       (b, n) => emitZombies(g, world, b, n),
-      (b, n) => emitHumans(g, world, b, n),
+      (b, n) => emitHumans(g, world, b, n, true),
+      g.night,
     );
+    if (g.routine) stepRoutine(g, world);
     countPopulation(g);
   }
 
@@ -793,7 +834,7 @@ function refreshTargets(g: GameState): void {
   const o = g.outbreak;
   for (let i = 0; i < h.used; i++) {
     const s = h.state[i];
-    t.active[i] = s === HState.WALK || s === HState.FLEE ? 1 : 0;
+    t.active[i] = s === HState.WALK || s === HState.FLEE || s === HState.HOME ? 1 : 0;
     t.x[i] = h.x[i];
     t.y[i] = h.y[i];
   }
@@ -864,22 +905,78 @@ function emitZombies(g: GameState, world: GameWorld, b: number, n: number): numb
   return placed;
 }
 
-/** A building's well people run out into the street. Returns how many were placed. */
-function emitHumans(g: GameState, world: GameWorld, b: number, n: number): number {
+/**
+ * A building's well people go out into the street: running from the dead inside (`fleeing`), or just
+ * leaving for the day. Returns how many were placed.
+ */
+function emitHumans(
+  g: GameState,
+  world: GameWorld,
+  b: number,
+  n: number,
+  fleeing: boolean,
+): number {
   const o = g.outbreak;
   let placed = 0;
   for (let k = 0; k < n; k++) {
     const spot = streetSpot(g, world, o.doorX[b], o.doorY[b]);
     if (!spot) break;
-    const i = spawnHuman(g.humans, spot[0], spot[1], HState.FLEE);
+    const i = spawnHuman(g.humans, spot[0], spot[1], fleeing ? HState.FLEE : HState.WALK);
     if (i < 0) break;
-    // away from the building, whichever way the door faces
-    const a = Math.atan2(spot[1] - o.doorY[b], spot[0] - o.doorX[b]);
-    g.humans.tx[i] = Math.cos(a);
-    g.humans.ty[i] = Math.sin(a);
+    if (fleeing) {
+      // away from the building, whichever way the door faces
+      const a = Math.atan2(spot[1] - o.doorY[b], spot[0] - o.doorX[b]);
+      g.humans.tx[i] = Math.cos(a);
+      g.humans.ty[i] = Math.sin(a);
+    }
     placed++;
   }
   return placed;
+}
+
+/**
+ * The people's day. Each second the number out in the street is brought toward what the hour calls for
+ * (a few percent in the small hours, over a tenth in the morning rush and the evening), fewer the more
+ * frightened the city is: some leave their buildings, and when there are too many out, some start for
+ * home. Nobody is made or lost: they are counted in the building they leave or go back to.
+ */
+export function stepRoutine(g: GameState, world: GameWorld): void {
+  const { outbreak: o, humans } = g;
+  if (o.count === 0 || humans.capacity === 0) return;
+  const p = g.population;
+  const calm = 1 - 0.9 * fear(p.zombies, p.initial);
+  const want = Math.min(humans.capacity, Math.round(outdoorShare(g.clock) * calm * p.healthy));
+  const have = humans.alive;
+
+  if (have < want) {
+    // some leave: the bigger the building, the likelier it is that someone does
+    const going = Math.min(want - have, Math.max(6, Math.ceil((want - have) * 0.3)));
+    let left = 0;
+    for (let tries = 0; tries < going * 8 && left < going; tries++) {
+      const b = Math.floor(nextFloat(g.rng) * o.count);
+      const healthy = o.healthy[b];
+      if (healthy < 1 || Number.isNaN(o.doorX[b])) continue;
+      // nobody goes out of a building the dead are in
+      if (o.undead[b] > 0 || o.incubating[b] > 0 || o.open[b] === 1) continue;
+      if (nextFloat(g.rng) > 0.15 + healthy / 150) continue;
+      const out = emitHumans(g, world, b, 1, false);
+      o.healthy[b] -= out;
+      left += out;
+    }
+  } else if (have > want * 1.1 + 5) {
+    // some go home
+    const sending = Math.min(have - want, Math.max(6, Math.ceil((have - want) * 0.3)));
+    let sent = 0;
+    for (let k = 0; k < humans.used && sent < sending; k++) {
+      const i = (g.homeCursor + k) % humans.used;
+      if (humans.state[i] !== HState.WALK) continue;
+      humans.state[i] = HState.HOME;
+      humans.timer[i] = HUMAN.homePatience;
+      humans.tx[i] = Number.NaN;
+      sent++;
+      g.homeCursor = i + 1;
+    }
+  }
 }
 
 /** Zombies are hitting a shelter's door. If it gives way they are in: everyone behind it is lost. */

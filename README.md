@@ -146,8 +146,10 @@ was).
   tilt, `T` jumps to the landmark), and `V` again returns to the survivor.
 - **Other keys:** `P` or `Esc` pauses (a menu offers resume, start again, back to the globe), `F2`
   shows a performance panel. The game also pauses by itself when the window loses focus.
-- **Time of day:** a slider sets the real sun position over the place (a fixed autumn date). Windows and
-  street lamps light up as it gets dark.
+- **Time of day:** the day goes by as you play, an hour for every minute (a whole day in 24 minutes),
+  with the real sun over the place on a fixed autumn date. A game starts at 8 in the morning; windows
+  and street lamps light up as it gets dark. The clock in the corner shows the time; add `&cycle=0` to
+  the address to stop it, and the slider then sets the hour by hand.
 - **Deep links:** `/?hour=17.4&view=x,y,yaw,pitch,distance&player=x,y&camera=free#city=paris` opens at a
   given time, camera placement and survivor position (metres east and north of the centre, degrees,
   metres). All parts are optional; `view` alone starts in the free camera. Game options are in
@@ -163,9 +165,17 @@ the clock at the top of the screen counts how long you have lasted.
 
 **The city is full of people.** Tens of thousands of them (about 30,000 in Tashkent), worked out from the real density of the place
 (7,700 per square kilometre in Tashkent) and shared between the real buildings by size, height and kind: a tall
-block of flats holds hundreds, a house a handful, a shed nobody. Nearly everyone is indoors; a few
-percent are out in the street as individuals (drawn as dots from high up) who stroll about, run from
-zombies and gunfire, and make for the nearest door.
+block of flats holds hundreds, a house a handful, a shed nobody. Nearly everyone is indoors; the rest
+are out in the street as individuals (drawn as dots from high up) who stroll about, run from zombies
+and gunfire, and make for the nearest door. How many are out follows the hour: a few percent in the
+small hours, over a tenth in the morning rush and the evening. People leave their buildings and go home
+again through the day, and the more of the city has turned, the more of them stay in.
+
+**Night is worse.** When the sun goes down (a note under the clock says so) the dead are more active
+and more aggressive: they roam further and rest less, hear and smell further and rouse each other from
+further off, hunt a quarter faster, strike sooner and hit a quarter harder, and the infection spreads
+faster inside the buildings. A walker is still slower than you walking, and a runner than your sprint,
+but the margin is thin. The nights last about twelve hours; be somewhere safe before dark.
 
 **The outbreak spreads from person to person.** It starts in a few buildings far from you, with no
 zombies in the street at first, so the first minutes are quiet. Inside a building the turned bite the
@@ -220,8 +230,9 @@ spell.
 Game options go on the link, all optional: `&seed=123` replays the same game (same outbreak, zombies
 and supplies), `&patients=3` is how many buildings the outbreak begins in (0 for a calm city),
 `&density=7700` is people per square kilometre (default: the place's own), `&zombies=0` adds groups of zombies in the streets at
-the start. `&debug=1` puts the scene on `window.__city.debug` with levers for staging scenes (spawn
-zombies, put a crowd in the street, start an outbreak next to you, jump the clock, teleport).
+the start, `&hour=22` is the hour the game starts at and `&cycle=0` stops the day where it is.
+`&debug=1` puts the scene on `window.__city.debug` with levers for staging scenes (spawn zombies, put
+a crowd in the street, start an outbreak next to you, set the clock, teleport).
 
 To make another place (or redo one), run the extractor in Docker; it writes
 `public/cities/<id>.json` and prints what it found:

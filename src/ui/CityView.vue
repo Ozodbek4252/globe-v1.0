@@ -28,7 +28,7 @@ const progress = ref(0);
 const status = ref('Loading map data');
 const error = ref('');
 const ready = ref(false);
-const hour = ref(17.4);
+const hour = ref(8);
 const sunElevation = ref(0);
 const stats = shallowRef<CityStats | null>(null);
 const showStats = ref(false);
@@ -45,7 +45,8 @@ let stopRadar: (() => void) | null = null;
 /**
  * Optional deep link, handy for sharing a spot or reproducing a screenshot. Metres are east/north of
  * the city centre; angles are degrees.
- *   ?hour=17.4                        time of day
+ *   ?hour=17.4                        the hour of the day the game starts at (default 8, morning)
+ *   &cycle=0                          stop the clock, for a still day (the slider then sets the time)
  *   &view=x,y,yaw,pitch,distance      start with the free camera here
  *   &player=x,y                       put the survivor near this point
  *   &camera=free|follow               which camera to start with
@@ -86,6 +87,7 @@ function linkOptions(): {
   if (patients !== undefined && patients >= 0) game.patients = Math.min(40, Math.floor(patients));
   const density = number('density');
   if (density !== undefined && density > 0) game.density = Math.min(30000, density);
+  if (q.get('cycle') === '0') game.cycle = false;
   out.game = game;
   if (q.get('debug') === '1') out.debug = true;
   return out;
@@ -152,7 +154,12 @@ onMounted(async () => {
     if (link.debug) (window as unknown as { __city?: CityScene }).__city = created;
     sunElevation.value = Math.round(created.sunElevation());
     stopStats = created.onStats((s) => (stats.value = s));
-    stopPlayer = created.onPlayer((s) => (player.value = s));
+    stopPlayer = created.onPlayer((s) => {
+      player.value = s;
+      // the clock shows the game's time (which moves by itself, or where the slider put it)
+      hour.value = s.hour;
+      sunElevation.value = Math.round(created.sunElevation());
+    });
     stopGame = created.onGame((n) => {
       hud.value?.push(n);
       if (n.type === 'over') emit('over', n.time);
@@ -245,10 +252,19 @@ onBeforeUnmount(() => {
           min="0"
           max="24"
           step="0.05"
+          :disabled="player?.cycle"
+          :title="
+            player?.cycle
+              ? 'The day goes by by itself: an hour for every minute you play'
+              : undefined
+          "
           @input="onTime"
         />
         <output for="city-hour"
           >{{ clock(hour) }} · sun {{ sunElevation >= 0 ? '+' : '' }}{{ sunElevation }}°</output
+        >
+        <span v-if="player && player.night > 0.5" class="city-night" role="status"
+          >Night: the dead are restless</span
         >
       </div>
 
@@ -477,6 +493,13 @@ onBeforeUnmount(() => {
 .city-time input {
   width: 100%;
   accent-color: var(--accent);
+}
+.city-night {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: #ff9a8c;
+  letter-spacing: 0.02em;
 }
 .city-time output {
   font-family: var(--f-mono);

@@ -15,8 +15,8 @@ export const POP = {
   netFloor: 0.78,
   /** Floor height used to count storeys when a building only has a height. */
   storey: 3.1,
-  /** Fraction of each building's people who are out in the street at the start. */
-  outdoors: 0.06,
+  /** At night the dead bite this much more often (the same dark that quickens them in the street). */
+  night: 0.5,
   /** Inside a building: bites per zombie per second; seconds from a bite to turning. */
   bite: 0.11,
   incubation: 14,
@@ -212,7 +212,10 @@ export function stepOutbreak(
   rng: Rng,
   emitZombies: (building: number, n: number) => number,
   emitHumans: (building: number, n: number) => number,
+  /** How dark it is, 0 to 1: the dead bite more often at night. */
+  night = 0,
 ): void {
+  const bite = POP.bite * (1 + POP.night * night);
   for (let b = 0; b < o.count; b++) {
     let h = o.healthy[b];
     let i = o.incubating[b];
@@ -224,7 +227,7 @@ export function stepOutbreak(
     i -= turned;
     u += turned;
     // the turned bite the well
-    const bitten = Math.min(h, roundSeeded(u * POP.bite * seconds, rng));
+    const bitten = Math.min(h, roundSeeded(u * bite * seconds, rng));
     h -= bitten;
     i += bitten;
     o.healthy[b] = h;

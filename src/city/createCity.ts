@@ -32,6 +32,7 @@ import {
 import { createEmitter, type Unsubscribe } from '../lib/emitter';
 import { utcOffsetHours } from '../lib/sun';
 import { buildColliders, findSpawn } from '../sim/colliders';
+import { DAY, nightness, wrapHour } from '../sim/daylight';
 import {
   createGame,
   createGameWorld,
@@ -88,7 +89,7 @@ import { LAMP_STRIDE, placeLamps, type LampSet } from './lamps';
 import { buildOccupancy } from './occupancy';
 import { TERRAIN, WATER, srgb } from './palette';
 import { createSky } from './sky';
-import { localSun, skyPalette, sunDirection } from './sunlight';
+import { localSun, skyPalette, sunDirection, sunTimes } from './sunlight';
 import {
   createFacadeTextures,
   createGlowTexture,
@@ -146,6 +147,10 @@ export interface PlayerStatus {
   food: number;
   /** The gun in hand is dry, so a click swings the melee weapon instead. */
   meleeReady: boolean;
+  /** The hour of the in-game day (0-24, local time), how dark it is (0 to 1), and whether the day goes by by itself. */
+  hour: number;
+  night: number;
+  cycle: boolean;
   /** The game is paused: nothing moves, hunger and the clock stand still. */
   paused: boolean;
   /** The gun in hand, and whether the shotgun has been found. */
@@ -239,6 +244,8 @@ export interface CityDebug {
   autoAim(on: boolean): void;
   /** Take health off the survivor. */
   hurt(amount: number): void;
+  /** Set the hour of the day (0-24). */
+  setClock(hour: number): void;
   /** Jump the game clock forward. */
   skip(seconds: number): void;
   /** Set the game clock to an exact time. */
@@ -258,6 +265,9 @@ export interface CityDebug {
     kills: number;
     shots: number;
     time: number;
+    /** The hour of the day and how dark it is (0 to 1). */
+    clock: number;
+    night: number;
     x: number;
     y: number;
     /** Which way the survivor faces, in radians counter-clockwise from east. */
@@ -282,6 +292,8 @@ export interface GameSetup {
   seed?: number;
   /** Groups of zombies in the streets at the start (0 for none). */
   zombies?: number;
+  /** False to stop the clock where it is, for a still day: the time of day stays what `hour` says. */
+  cycle?: boolean;
   /** How many people have turned somewhere in the city to begin with (0 for a calm city). */
   patients?: number;
   /** People per square kilometre. The default is the real density of the city. */
@@ -289,7 +301,7 @@ export interface GameSetup {
 }
 
 export interface CityOptions {
-  /** Local hour (0-24) to start at. Default is golden hour. */
+  /** Local hour (0-24) the game starts at; the day then goes by as you play. Default is morning. */
   hour?: number;
   /** Start from this viewpoint instead of the default one, with no fly-in. Implies the free camera. */
   view?: CityViewpoint;
@@ -615,6 +627,15 @@ export async function createCityScene(
   const gameWorld = createGameWorld(colliders, [spawnX, spawnY], data.buildings);
   const setup = options.game ?? {};
   let seed = setup.seed ?? Math.floor(Math.random() * 0xffffffff);
+  // the day: it starts at this hour and goes by as you play, an hour a minute; the game needs to know
+  // when the sun rises and sets over this place, since that is when the dead are at their worst
+  const startHour = options.hour ?? DAY.start;
+  const sunToday = sunTimes(
+    data.center[0],
+    data.center[1],
+    REFERENCE_DAY,
+    utcOffsetHours(data.center[0]),
+  );
   const newGame = (): GameState =>
     createGame(gameWorld, {
       seed,
@@ -623,6 +644,10 @@ export async function createCityScene(
       clumps: setup.zombies,
       patients: setup.patients,
       density: setup.density,
+      startHour,
+      cycle: setup.cycle,
+      sunrise: sunToday?.sunrise,
+      sunset: sunToday?.sunset,
     });
   let game = newGame();
   let player: PlayerState = game.player;
@@ -748,7 +773,7 @@ export async function createCityScene(
   }
 
   // ---------- time of day ----------
-  let hour = options.hour ?? 17.4;
+  let hour = startHour;
   let elevation = 0;
   let darkness = 0; // 0 in daylight, 1 at night: drives the flashlight and the glow
   const lightDirection = new Vector3();
@@ -1111,6 +1136,11 @@ export async function createCityScene(
       steps++;
     }
     if (steps === 6) simClock = 0; // far behind (a stalled tab): do not try to catch up
+    // the sky follows the game's clock, however it was set (it changes in steps of about a minute)
+    if (Math.abs(game.clock - hour) > 0.015) {
+      hour = game.clock;
+      applyTime();
+    }
     gamePhase = game.status;
     const alpha = simClock / SIM_STEP;
     const px = lerp(previous.x, player.x, alpha);
@@ -1274,6 +1304,9 @@ export async function createCityScene(
         health: game.health,
         food: game.food,
         meleeReady: game.ammo <= 0 && game.reserve <= 0,
+        hour: game.clock,
+        night: game.night,
+        cycle: game.cycle,
         paused,
         weapon: game.weapon,
         hasShotgun: game.hasShotgun,
@@ -1357,7 +1390,10 @@ export async function createCityScene(
 
   return {
     setHour(h) {
-      hour = ((h % 24) + 24) % 24;
+      // a time set by hand is the time the game plays at, too: the dead follow the clock, not the picture
+      hour = wrapHour(h);
+      game.clock = hour;
+      game.night = nightness(hour, game.sunrise, game.sunset);
       applyTime();
     },
     getHour: () => hour,
@@ -1459,6 +1495,10 @@ export async function createCityScene(
           hurt(amount) {
             game.health -= amount;
           },
+          setClock(hour) {
+            game.clock = wrapHour(hour);
+            game.night = nightness(game.clock, game.sunrise, game.sunset);
+          },
           skip(seconds) {
             game.time += seconds;
           },
@@ -1485,6 +1525,8 @@ export async function createCityScene(
             kills: game.stats.kills,
             shots: game.stats.shots,
             time: game.time,
+            clock: game.clock,
+            night: game.night,
             x: game.player.x,
             y: game.player.y,
             heading: game.player.heading,

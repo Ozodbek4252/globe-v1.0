@@ -230,12 +230,33 @@ export function createZombieRenderer(capacity: number): ZombieRenderer {
         const y = horde.y[i];
         const dx = x - focusX;
         const dy = y - focusY;
+        const dead = state === ZState.DEAD;
+
+        // The dots are the overview of the whole horde, so every zombie gets one, near or far. (Bodies
+        // are only drawn near the camera's focus; the dots used to stop there too, which hid the whole
+        // outbreak from a camera pulled back over the city.)
+        if (dotAmount > 0.01 && !(dead && dx * dx + dy * dy > range2)) {
+          dummy.position.set(x, 0.16, -y);
+          dummy.scale.setScalar(dead ? dotSize * 0.45 : dotSize);
+          dummy.updateMatrix();
+          dots.setMatrixAt(d, dummy.matrix);
+          colour.copy(
+            dead
+              ? DOT_DEAD
+              : state === ZState.ATTACK
+                ? DOT_STRIKING
+                : state === ZState.CHASE || state === ZState.INVESTIGATE
+                  ? DOT_HUNTING
+                  : DOT_CALM,
+          );
+          dots.setColorAt(d, colour);
+          d++;
+        }
         if (dx * dx + dy * dy > range2) continue;
 
         const speed = Math.hypot(horde.vx[i], horde.vy[i]);
         walked[i] += (speed * dt) / STRIDE;
         const kind = ZOMBIE.kinds[horde.kind[i]];
-        const dead = state === ZState.DEAD;
 
         let lean = 0.12;
         let swing = Math.min(1.3, speed / 2.3) * 0.75;
@@ -278,24 +299,6 @@ export function createZombieRenderer(capacity: number): ZombieRenderer {
         amp.setX(n, swing);
         bodies.setColorAt(n, TINTS[Math.floor(hash(i + 7) * TINTS.length)]);
         n++;
-
-        if (dotAmount > 0.01) {
-          dummy.position.set(x, 0.16, -y);
-          dummy.scale.setScalar(dead ? dotSize * 0.45 : dotSize);
-          dummy.updateMatrix();
-          dots.setMatrixAt(d, dummy.matrix);
-          colour.copy(
-            dead
-              ? DOT_DEAD
-              : state === ZState.ATTACK
-                ? DOT_STRIKING
-                : state === ZState.CHASE || state === ZState.INVESTIGATE
-                  ? DOT_HUNTING
-                  : DOT_CALM,
-          );
-          dots.setColorAt(d, colour);
-          d++;
-        }
       }
       drawnNow = n;
       bodies.count = n;

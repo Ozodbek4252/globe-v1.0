@@ -21,6 +21,8 @@ export const HState = {
   FLEE: 1,
   /** Bitten: staggering on, about to turn. */
   BITTEN: 2,
+  /** Heading for the nearest door to go in for the night (or the day): the street is emptying. */
+  HOME: 4,
   /** An unused slot. */
   FREE: 3,
 } as const;
@@ -41,6 +43,10 @@ export const HUMAN = {
   /** Beyond this from the survivor they are simulated coarsely: every fourth step with a four times longer step. */
   farRange: 220,
   perceptionEvery: 12,
+  /** Going home: how far they look for a door, how briskly they walk, and how long before they give up and stroll on. */
+  homeRange: 90,
+  home: 1.6,
+  homePatience: 45,
   accel: 9,
   turnRate: 9,
 } as const;
@@ -125,7 +131,8 @@ function release(h: Humans, i: number): void {
 
 /** A zombie got them: they stagger on for a few seconds, then turn. Returns false if they were not free to be bitten. */
 export function biteHuman(h: Humans, i: number): boolean {
-  if (h.state[i] !== HState.WALK && h.state[i] !== HState.FLEE) return false;
+  const s = h.state[i];
+  if (s !== HState.WALK && s !== HState.FLEE && s !== HState.HOME) return false;
   h.state[i] = HState.BITTEN;
   h.timer[i] = HUMAN.incubation;
   h.alive--; // no longer someone the horde goes for, nor someone the radar counts as well
@@ -186,7 +193,7 @@ function visitDoor(b: number, d2: number): void {
 /** Look around: is something coming? If so, run, away from it and toward a door if there is one. */
 function sense(h: Humans, i: number, ctx: HumanContext): void {
   const s = h.state[i];
-  if (s !== HState.WALK && s !== HState.FLEE) return;
+  if (s !== HState.WALK && s !== HState.FLEE && s !== HState.HOME) return;
   const x = h.x[i];
   const y = h.y[i];
   scan.ctx = ctx;
@@ -299,6 +306,26 @@ function visitNearDoor(b: number, d2: number): void {
   doorProbe.bestD2 = d2;
 }
 
+/** If someone is at a shut door, they go in and it closes behind them. */
+function goInIfAtDoor(h: Humans, i: number, ctx: HumanContext): void {
+  doorProbe.ctx = ctx;
+  doorProbe.best = -1;
+  doorProbe.bestD2 = 2.2 * 2.2;
+  forEachNear(
+    ctx.doors,
+    h.x[i],
+    h.y[i],
+    2.2,
+    ctx.outbreak.doorX,
+    ctx.outbreak.doorY,
+    visitNearDoor,
+  );
+  if (doorProbe.best >= 0) {
+    release(h, i);
+    ctx.onEnter(doorProbe.best);
+  }
+}
+
 function stepOne(h: Humans, i: number, ctx: HumanContext, dt: number): void {
   const state = h.state[i];
   if (state === HState.BITTEN) {
@@ -338,23 +365,48 @@ function stepOne(h: Humans, i: number, ctx: HumanContext, dt: number): void {
       h.stuck[i] = 0;
     }
     walkAt(h, i, ctx, h.tx[i], h.ty[i], HUMAN.flee * h.pace[i], dt);
-    // reached a door: in, and the door shut behind them
-    doorProbe.ctx = ctx;
-    doorProbe.best = -1;
-    doorProbe.bestD2 = 2.2 * 2.2;
-    forEachNear(
-      ctx.doors,
-      h.x[i],
-      h.y[i],
-      2.2,
-      ctx.outbreak.doorX,
-      ctx.outbreak.doorY,
-      visitNearDoor,
-    );
-    if (doorProbe.best >= 0) {
-      release(h, i);
-      ctx.onEnter(doorProbe.best);
+    goInIfAtDoor(h, i, ctx); // reached a door: in, and the door shut behind them
+    return;
+  }
+
+  if (state === HState.HOME) {
+    h.timer[i] -= dt;
+    if (h.timer[i] <= 0 || h.stuck[i] > 1.5) {
+      // no way there (or no door near): stroll on, and try again some other time
+      h.state[i] = HState.WALK;
+      h.timer[i] = 2 + nextFloat(h.rng) * 4;
+      h.tx[i] = Number.NaN;
+      h.stuck[i] = 0;
+      return;
     }
+    if (Number.isNaN(h.tx[i])) {
+      // the nearest door that is still shut, if there is one within reach
+      doorProbe.ctx = ctx;
+      doorProbe.best = -1;
+      doorProbe.bestD2 = HUMAN.homeRange * HUMAN.homeRange;
+      forEachNear(
+        ctx.doors,
+        h.x[i],
+        h.y[i],
+        HUMAN.homeRange,
+        ctx.outbreak.doorX,
+        ctx.outbreak.doorY,
+        visitNearDoor,
+      );
+      if (doorProbe.best < 0) {
+        h.state[i] = HState.WALK;
+        h.timer[i] = 3 + nextFloat(h.rng) * 5;
+        return;
+      }
+      h.tx[i] = ctx.outbreak.doorX[doorProbe.best];
+      h.ty[i] = ctx.outbreak.doorY[doorProbe.best];
+      h.stuck[i] = 0;
+    }
+    const dx = h.tx[i] - h.x[i];
+    const dy = h.ty[i] - h.y[i];
+    const d = Math.hypot(dx, dy) || 1;
+    walkAt(h, i, ctx, dx / d, dy / d, HUMAN.home * h.pace[i], dt);
+    goInIfAtDoor(h, i, ctx);
     return;
   }
 

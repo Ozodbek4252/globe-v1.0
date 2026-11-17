@@ -334,3 +334,75 @@ describe('the people of the real Tashkent district', () => {
     expect(['apartments', 'commercial', 'civic', 'other']).toContain(biggestKind);
   });
 });
+
+describe('the outbreak at night', () => {
+  it('spreads faster: the dead bite more often in the dark', () => {
+    const wellAfter = (night: number): number => {
+      const o: Outbreak = {
+        count: 1,
+        healthy: Int32Array.of(60),
+        incubating: Int32Array.of(0),
+        undead: Int32Array.of(3),
+        doorX: Float32Array.of(0),
+        doorY: Float32Array.of(0),
+        doorHp: Float32Array.of(100),
+        open: Uint8Array.of(0),
+        initial: 63,
+        clock: 0,
+      };
+      const rng = createRng(9);
+      // nobody leaves the building and nobody comes out, so the bites are all there is to count
+      for (let s = 0; s < 12; s++)
+        stepOutbreak(
+          o,
+          1,
+          rng,
+          () => 0,
+          () => 0,
+          night,
+        );
+      return o.healthy[0];
+    };
+    expect(wellAfter(1)).toBeLessThan(wellAfter(0));
+    expect(POP.night).toBeGreaterThan(0);
+  });
+
+  it('is the same by day as it was before there was a night', () => {
+    const run = (night?: number): string => {
+      const o: Outbreak = {
+        count: 1,
+        healthy: Int32Array.of(30),
+        incubating: Int32Array.of(2),
+        undead: Int32Array.of(2),
+        doorX: Float32Array.of(0),
+        doorY: Float32Array.of(0),
+        doorHp: Float32Array.of(100),
+        open: Uint8Array.of(0),
+        initial: 34,
+        clock: 0,
+      };
+      const rng = createRng(3);
+      for (let s = 0; s < 40; s++) {
+        if (night === undefined)
+          stepOutbreak(
+            o,
+            1,
+            rng,
+            (_, n) => n,
+            (_, n) => n,
+          );
+        else
+          stepOutbreak(
+            o,
+            1,
+            rng,
+            (_, n) => n,
+            (_, n) => n,
+            night,
+          );
+      }
+      return [o.healthy[0], o.incubating[0], o.undead[0]].join();
+    };
+    expect(run(0)).toBe(run());
+  });
+});

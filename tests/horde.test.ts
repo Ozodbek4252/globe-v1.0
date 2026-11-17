@@ -6,6 +6,7 @@ import {
   createTargets,
   damageZombie,
   hordeChecksum,
+  NIGHT,
   sendHunting,
   shoveZombie,
   spawnZombie,
@@ -46,13 +47,26 @@ function arena(extra: Partial<ColliderSource> = {}) {
   const reachable = reachableFrom(nav, 0, 0);
   const flow = createFlowField(nav);
   let tick = 0;
-  const context = (px: number, py: number, noises: Noise[] = [], alive = true): HordeContext => {
+  const context = (
+    px: number,
+    py: number,
+    noises: Noise[] = [],
+    alive = true,
+    night = 0,
+  ): HordeContext => {
     updateFlow(flow, px, py);
-    return { world, nav, flow, reachable, px, py, playerAlive: alive, noises };
+    return { world, nav, flow, reachable, px, py, playerAlive: alive, noises, night };
   };
   /** Run for `seconds` with the survivor standing still; returns the damage taken and when each hit landed. */
-  const run = (h: Horde, px: number, py: number, seconds: number, noises: Noise[] = []) => {
-    const ctx = context(px, py, noises);
+  const run = (
+    h: Horde,
+    px: number,
+    py: number,
+    seconds: number,
+    noises: Noise[] = [],
+    night = 0,
+  ) => {
+    const ctx = context(px, py, noises, true, night);
     const hits: number[] = [];
     let total = 0;
     const steps = Math.round(seconds / DT);
@@ -520,5 +534,122 @@ describe('going for other targets', () => {
         if (v >= 0) expect([ZState.CHASE, ZState.ATTACK]).toContain(h.state[k]);
       }
     }
+  });
+});
+
+describe('the dead at night', () => {
+  /** A zombie hunting a survivor who stands still `away` metres off; how far it got in `seconds`. */
+  const closed = (
+    night: number,
+    away: number,
+    seconds: number,
+    kind: number = ZKind.WALKER,
+  ): number => {
+    const { run } = arena();
+    const h = createHorde(2, 1);
+    const i = spawnZombie(h, away, 0, kind, ZState.CHASE);
+    sendHunting(h, i, 60);
+    h.pace[i] = 1;
+    run(h, 0, 0, seconds, [], night);
+    return away - h.x[i];
+  };
+
+  it('is the same as before with no night (and with the night left out altogether)', () => {
+    const { run, context } = arena();
+    const a = createHorde(2, 1);
+    const b = createHorde(2, 1);
+    spawnZombie(a, 20, 0, ZKind.WALKER, ZState.CHASE);
+    spawnZombie(b, 20, 0, ZKind.WALKER, ZState.CHASE);
+    run(a, 0, 0, 3, [], 0);
+    const ctx = context(0, 0);
+    delete ctx.night;
+    for (let s = 0; s < 180; s++) stepHorde(b, ctx, DT, s);
+    expect(hordeChecksum(a)).toBeCloseTo(hordeChecksum(b), 3);
+  });
+
+  it('hunt faster in the dark: a quarter faster at full night, and in between at dusk', () => {
+    const day = closed(0, 40, 6);
+    const dusk = closed(0.5, 40, 6);
+    const night = closed(1, 40, 6);
+    expect(night).toBeGreaterThan(day * 1.15);
+    expect(night).toBeLessThan(day * 1.35);
+    expect(dusk).toBeGreaterThan(day);
+    expect(dusk).toBeLessThan(night);
+  });
+
+  it('keep their place: a walker is still slower than a walking survivor, and a runner than a sprint', () => {
+    expect(ZOMBIE.kinds[ZKind.WALKER].chase * (1 + NIGHT.chase)).toBeLessThan(3.4);
+    expect(ZOMBIE.kinds[ZKind.RUNNER].chase * (1 + NIGHT.chase)).toBeLessThan(7.6);
+  });
+
+  it('hear further: a noise just past their daytime hearing carries to them at night', () => {
+    const { run } = arena();
+    const heardBy = (night: number): number => {
+      const h = createHorde(2, 1);
+      const i = standing(h, 38, 0, 0);
+      run(h, -140, 0, 0.6, [{ x: 0, y: 0, radius: 30, ttl: 5 }], night);
+      return h.state[i];
+    };
+    expect(heardBy(0)).toBe(ZState.WANDER); // 38 m from a 30 m noise: not heard
+    expect(heardBy(1)).toBe(ZState.INVESTIGATE); // 30 m carries 42 m at night
+  });
+
+  it('smell further: someone close behind them is noticed from a little further off', () => {
+    const { run } = arena();
+    const noticed = (night: number): boolean => {
+      const h = createHorde(2, 1);
+      const i = standing(h, 4.2, 0, 0); // facing away, just beyond the smell of 3.5 m
+      run(h, 0, 0, 0.6, [], night);
+      return h.state[i] === ZState.CHASE;
+    };
+    expect(noticed(0)).toBe(false);
+    expect(noticed(1)).toBe(true); // 3.5 m smells 4.9 m at night
+  });
+
+  it('roam more: they rest less between wanderings and walk faster, so they cover more ground', () => {
+    const { run } = arena();
+    const pathLength = (night: number): number => {
+      const h = createHorde(20, 4);
+      for (let k = 0; k < 20; k++) spawnZombie(h, k * 3 - 30, 20, ZKind.WALKER, ZState.WANDER);
+      let total = 0;
+      for (let second = 0; second < 90; second++) {
+        const before = Array.from({ length: 20 }, (_, k) => [h.x[k], h.y[k]]);
+        run(h, 140, 140, 1, [], night);
+        for (let k = 0; k < 20; k++)
+          total += Math.hypot(h.x[k] - before[k][0], h.y[k] - before[k][1]);
+      }
+      return total;
+    };
+    expect(pathLength(1)).toBeGreaterThan(pathLength(0) * 1.4);
+  });
+
+  it('strike sooner and harder: the same zombie does more damage in the same time', () => {
+    const { run } = arena();
+    const damage = (night: number): number => {
+      const h = createHorde(2, 1);
+      const i = spawnZombie(h, 1, 0, ZKind.WALKER, ZState.CHASE);
+      sendHunting(h, i, 60);
+      return run(h, 0, 0, 12, [], night).total;
+    };
+    const day = damage(0);
+    const night = damage(1);
+    expect(day).toBeGreaterThan(0);
+    // a quarter more damage a blow, and about a third more blows
+    expect(night).toBeGreaterThan(day * 1.4);
+    expect(night).toBeLessThan(day * 2);
+  });
+
+  it('wake the neighbours from further off', () => {
+    const { run } = arena();
+    const roused = (night: number): number => {
+      const h = createHorde(4, 1);
+      const caller = standing(h, 15, 0, Math.PI); // sees the survivor
+      const neighbour = standing(h, 15 + 11, 0, 0); // 11 m away: beyond the daytime 9 m
+      run(h, 0, 0, 0.6, [], night);
+      expect(h.state[caller]).toBe(ZState.CHASE);
+      return h.state[neighbour];
+    };
+    expect(roused(0)).toBe(ZState.WANDER);
+    expect(roused(1)).not.toBe(ZState.WANDER); // roused, and on its way
   });
 });

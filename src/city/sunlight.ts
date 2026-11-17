@@ -202,3 +202,27 @@ export function skyPalette(elevation: number): SkyPalette {
     sunGlow: num(a.sunGlow, b.sunGlow),
   };
 }
+
+/**
+ * When the sun rises and sets over a place on a given day, in local hours, from where it crosses the
+ * horizon. Null if it never does that day (polar day or night). `utcOffset` is the local time zone, in
+ * hours, and `day` is the UTC midnight that starts the local date.
+ */
+export function sunTimes(
+  lon: number,
+  lat: number,
+  day: number,
+  utcOffset: number,
+): { sunrise: number; sunset: number } | null {
+  let sunrise: number | null = null;
+  let sunset: number | null = null;
+  const step = 0.05;
+  let before = localSun(day - utcOffset * 3_600_000, lon, lat).elevation;
+  for (let hour = step; hour <= 24 + 1e-9; hour += step) {
+    const now = localSun(day + (hour - utcOffset) * 3_600_000, lon, lat).elevation;
+    if (before < 0 && now >= 0 && sunrise === null) sunrise = hour - step / 2;
+    if (before >= 0 && now < 0 && sunset === null) sunset = hour - step / 2;
+    before = now;
+  }
+  return sunrise !== null && sunset !== null ? { sunrise, sunset } : null;
+}

@@ -75,6 +75,22 @@ export const ZOMBIE = {
   turnRate: 9,
 } as const;
 
+/**
+ * What the dark does to them (at full night; it eases in with `HordeContext.night`, 0 to 1). They are
+ * more active (they roam further, faster, and rest less), more alert (noises carry and they smell
+ * further, and rouse each other from further off) and more aggressive (they hunt faster, wind up and
+ * recover quicker, and hit harder). Each is a share added on: 0.25 is a quarter more.
+ */
+export const NIGHT = {
+  chase: 0.25,
+  wander: 0.7,
+  rest: 0.6,
+  hearing: 0.4,
+  alert: 0.5,
+  strike: 0.25,
+  damage: 0.25,
+} as const;
+
 export interface Noise {
   x: number;
   y: number;
@@ -127,6 +143,8 @@ const probe = {
   y: 0,
   best: -1,
   bestD2: 0,
+  /** How far it smells them through walls (further at night). */
+  smell2: 0,
 };
 
 function visitTarget(k: number, d2: number): void {
@@ -134,7 +152,7 @@ function visitTarget(k: number, d2: number): void {
   if (!t || d2 >= probe.bestD2) return;
   // close by, it smells them through anything; farther off it needs a clear line
   if (
-    d2 > ZOMBIE.smell * ZOMBIE.smell &&
+    d2 > probe.smell2 &&
     (!probe.world || !lineOfSight(probe.world, probe.x, probe.y, t.x[k], t.y[k]))
   ) {
     return;
@@ -167,6 +185,8 @@ export interface HordeContext {
    */
   hidden?: boolean;
   noises: readonly Noise[];
+  /** How dark it is, 0 (day, the default) to 1 (night): see `NIGHT`. */
+  night?: number;
 }
 
 interface HordeGrid {
@@ -468,6 +488,8 @@ function perceive(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number
   const y = h.y[i];
   const d = Math.sqrt(d2);
   const interval = dt * ZOMBIE.perceptionEvery;
+  const night = ctx.night ?? 0;
+  const keen = 1 + NIGHT.hearing * night;
 
   let aware = false;
   h.clear[i] = 0;
@@ -476,7 +498,7 @@ function perceive(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number
     if (d < range) {
       const clear = lineOfSight(ctx.world, x, y, ctx.px, ctx.py);
       h.clear[i] = clear ? 1 : 0;
-      if (d < ZOMBIE.smell) aware = true;
+      if (d < ZOMBIE.smell * keen) aware = true;
       else if (clear) {
         const facing =
           s === ZState.CHASE ||
@@ -522,6 +544,7 @@ function perceive(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number
     probe.targets = targets;
     probe.best = -1;
     probe.bestD2 = reach * reach;
+    probe.smell2 = (ZOMBIE.smell * keen) ** 2;
     forEachNear(targets.index, x, y, reach, targets.x, targets.y, visitTarget);
     const best = probe.best;
     if (best >= 0) {
@@ -548,7 +571,7 @@ function perceive(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number
     if (n.ttl <= 0) continue;
     const nx = n.x - x;
     const ny = n.y - y;
-    if (nx * nx + ny * ny < n.radius * n.radius) {
+    if (nx * nx + ny * ny < (n.radius * keen) ** 2) {
       h.state[i] = ZState.INVESTIGATE;
       h.tx[i] = n.x;
       h.ty[i] = n.y;
@@ -577,9 +600,11 @@ function rouse(h: Horde, i: number, ctx: HordeContext): void {
   if (c < 0) return;
   const cx = c % g.side;
   const cy = (c - cx) / g.side;
-  const r2 = ZOMBIE.alertRadius * ZOMBIE.alertRadius;
-  for (let gy = Math.max(0, cy - 2); gy <= Math.min(g.side - 1, cy + 2); gy++) {
-    for (let gx = Math.max(0, cx - 2); gx <= Math.min(g.side - 1, cx + 2); gx++) {
+  const radius = ZOMBIE.alertRadius * (1 + NIGHT.alert * (ctx.night ?? 0));
+  const r2 = radius * radius;
+  const span = Math.ceil(radius / ZOMBIE.cell); // cells to look in, each way
+  for (let gy = Math.max(0, cy - span); gy <= Math.min(g.side - 1, cy + span); gy++) {
+    for (let gx = Math.max(0, cx - span); gx <= Math.min(g.side - 1, cx + span); gx++) {
       const cell = gy * g.side + gx;
       for (let k = g.start[cell]; k < g.start[cell + 1]; k++) {
         const j = g.items[k];
@@ -697,11 +722,19 @@ function wander(h: Horde, i: number, ctx: HordeContext, dt: number): void {
   const d = Math.hypot(dx, dy);
   if (d < 1.2 || h.stuck[i] > 1) {
     h.tx[i] = Number.NaN; // arrived, or blocked: rest a while, then pick somewhere else
-    h.timer[i] = 1 + nextFloat(h.rng) * 4;
+    h.timer[i] = (1 + nextFloat(h.rng) * 4) * (1 - NIGHT.rest * (ctx.night ?? 0));
     h.stuck[i] = 0;
     return;
   }
-  walk(h, i, ctx, dx / d, dy / d, ZOMBIE.wanderSpeed * h.pace[i], dt);
+  walk(
+    h,
+    i,
+    ctx,
+    dx / d,
+    dy / d,
+    ZOMBIE.wanderSpeed * h.pace[i] * (1 + NIGHT.wander * (ctx.night ?? 0)),
+    dt,
+  );
 }
 
 function investigate(h: Horde, i: number, ctx: HordeContext, dt: number): void {
@@ -729,7 +762,15 @@ function investigate(h: Horde, i: number, ctx: HordeContext, dt: number): void {
       dirY = flow[1];
     }
   }
-  walk(h, i, ctx, dirX, dirY, ZOMBIE.investigateSpeed * h.pace[i], dt);
+  walk(
+    h,
+    i,
+    ctx,
+    dirX,
+    dirY,
+    ZOMBIE.investigateSpeed * h.pace[i] * (1 + NIGHT.wander * (ctx.night ?? 0)),
+    dt,
+  );
 }
 
 /** Walk straight at a target and strike it when close. A target out of reach round a wall is given up on. */
@@ -749,7 +790,15 @@ function chaseVictim(h: Horde, i: number, ctx: HordeContext, dt: number): void {
     h.attackT[i] = 0;
     return;
   }
-  walk(h, i, ctx, dx / (d || 1), dy / (d || 1), ZOMBIE.kinds[h.kind[i]].chase * h.pace[i], dt);
+  walk(
+    h,
+    i,
+    ctx,
+    dx / (d || 1),
+    dy / (d || 1),
+    ZOMBIE.kinds[h.kind[i]].chase * h.pace[i] * (1 + NIGHT.chase * (ctx.night ?? 0)),
+    dt,
+  );
 }
 
 function chase(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number): void {
@@ -799,11 +848,25 @@ function chase(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number): 
       dirY = flow[1];
     }
   }
-  walk(h, i, ctx, dirX, dirY, ZOMBIE.kinds[h.kind[i]].chase * h.pace[i], dt);
+  walk(
+    h,
+    i,
+    ctx,
+    dirX,
+    dirY,
+    ZOMBIE.kinds[h.kind[i]].chase * h.pace[i] * (1 + NIGHT.chase * (ctx.night ?? 0)),
+    dt,
+  );
 }
 
 function attack(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number): void {
   const kind = ZOMBIE.kinds[h.kind[i]];
+  // in the dark they wind up and recover faster, and hit harder
+  const night = ctx.night ?? 0;
+  const quick = 1 - NIGHT.strike * night;
+  const windup = kind.windup * quick;
+  const cooldown = kind.cooldown * quick;
+  const blow = kind.damage * (1 + NIGHT.damage * night);
   walk(h, i, ctx, 0, 0, 0, dt); // plant its feet
 
   // who it is striking: a target slot if it has one that is still there, otherwise the survivor
@@ -821,14 +884,14 @@ function attack(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number):
   h.attackT[i] += dt;
   if (!targets && ctx.playerAlive && d < ZOMBIE.attackReach) h.engaged++;
   if (h.phase[i] === 0) {
-    if (h.attackT[i] >= kind.windup) {
+    if (h.attackT[i] >= windup) {
       const reach = targets ? ZOMBIE.attackReach + ZOMBIE.lunge : ZOMBIE.attackReach;
       if (d <= reach && lineOfSight(ctx.world, h.x[i], h.y[i], aimX, aimY)) {
-        if (targets) targets.damage[v] += kind.damage;
+        if (targets) targets.damage[v] += blow;
         else if (ctx.playerAlive) {
-          if (ctx.hidden) h.doorDamage += kind.damage;
+          if (ctx.hidden) h.doorDamage += blow;
           else {
-            h.damage += kind.damage;
+            h.damage += blow;
             h.lastHitX = h.x[i];
             h.lastHitY = h.y[i];
           }
@@ -837,11 +900,11 @@ function attack(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number):
       h.phase[i] = 1;
       h.attackT[i] = 0;
     }
-  } else if (h.attackT[i] >= kind.cooldown) {
+  } else if (h.attackT[i] >= cooldown) {
     h.state[i] = targets || ctx.playerAlive ? ZState.CHASE : ZState.WANDER;
     // Seeing the survivor refreshes the trail; battering a door they are behind does not. (A target
     // has no trail: the zombie either still has it in reach or lets go.)
-    h.timer[i] = ctx.hidden && !targets ? h.timer[i] + kind.windup + kind.cooldown : 0;
+    h.timer[i] = ctx.hidden && !targets ? h.timer[i] + windup + cooldown : 0;
     h.phase[i] = 0;
     h.attackT[i] = 0;
     if (!targets && !ctx.playerAlive) h.tx[i] = Number.NaN;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildColliders, insideBuilding } from '../src/sim/colliders';
+import { insideBuilding } from '../src/sim/colliders';
 import {
   createGame,
   createGameWorld,
@@ -8,83 +8,12 @@ import {
   NO_INPUT,
   stepGame,
   validSpot,
-  type GameEvent,
   type GameInput,
-  type GameOptions,
 } from '../src/sim/game';
 import { sendHunting, spawnZombie, ZKind, ZState } from '../src/sim/horde';
 import { HState, HUMAN, spawnHuman } from '../src/sim/humans';
-import type { PlaceBuilding } from '../src/sim/places';
 import { loadTashkent } from './helpers/tashkent';
-
-const DT = 1 / 60;
-
-const box = (x: number, y: number, w: number, h = w): number[] => [
-  x,
-  y,
-  x + w,
-  y,
-  x + w,
-  y + h,
-  x,
-  y + h,
-];
-
-/** Send everyone out in the street indoors-and-gone, so that a test about doors is about doors. */
-function emptyStreets(g: ReturnType<typeof createGame>): void {
-  const h = g.humans;
-  h.state.fill(HState.FREE);
-  h.used = 0;
-  h.alive = 0;
-  h.freeCount = 0;
-}
-
-/**
- * A town of the given buildings on open ground, with its people (a few hundred, not a real city's
- * thousands, so the tests run quickly), and no outbreak unless asked for.
- */
-function town(buildings: PlaceBuilding[], options: Partial<GameOptions> = {}, half = 800) {
-  const colliders = buildColliders({
-    halfSize: half,
-    buildings: buildings.map((b) => ({ outer: b.outer })),
-    areas: [],
-    waterways: [],
-    roads: [],
-  });
-  const world = createGameWorld(colliders, [0, 0], buildings);
-  const g = createGame(world, {
-    seed: 1,
-    startX: 0,
-    startY: 0,
-    clumps: 0,
-    patients: 0,
-    density: 250,
-    ...options,
-  });
-  const events: GameEvent[] = [];
-  const run = (seconds: number, input: Partial<GameInput> = {}): void => {
-    for (let s = 0; s < Math.round(seconds / DT); s++) {
-      stepGame(g, { ...NO_INPUT, ...input }, world, DT);
-      events.push(...drainEvents(g));
-    }
-  };
-  return { g, world, colliders, events, run };
-}
-
-const house = (id: number, x: number, y: number, w = 20, height = 6): PlaceBuilding => ({
-  id,
-  outer: box(x, y, w),
-  height,
-  kind: 'house',
-});
-
-/** Twelve blocks spread over the map, some near the start and most far from it. */
-const NEIGHBOURHOOD: PlaceBuilding[] = Array.from({ length: 12 }, (_, i) => ({
-  id: i + 1,
-  outer: box(((i % 4) - 2) * 300 + 20, (Math.floor(i / 4) - 1) * 300 + 20, 30),
-  height: 18,
-  kind: 'apartments',
-}));
+import { box, DT, emptyStreets, house, NEIGHBOURHOOD, town } from './helpers/town';
 
 describe('a city at the start', () => {
   it('is full of people, all well, with no zombies, wave or rescue in sight', () => {
@@ -108,10 +37,10 @@ describe('a city at the start', () => {
     expect(g.population.healthy).toBe(g.population.initial);
   });
 
-  it('puts a few percent in the street, near their own doors, on open ground', () => {
+  it('puts about a tenth in the street (as the hour has it), near their own doors, on open ground', () => {
     const { g, colliders } = town(NEIGHBOURHOOD);
     expect(g.humans.alive).toBeGreaterThan(5);
-    expect(g.humans.alive).toBeLessThan(g.population.initial * 0.12);
+    expect(g.humans.alive).toBeLessThan(g.population.initial * 0.2);
     for (let i = 0; i < g.humans.used; i++) {
       expect(insideBuilding(colliders, g.humans.x[i], g.humans.y[i])).toBe(false);
       let nearest = Infinity;
@@ -121,7 +50,7 @@ describe('a city at the start', () => {
           Math.hypot(g.humans.x[i] - g.outbreak.doorX[b], g.humans.y[i] - g.outbreak.doorY[b]),
         );
       }
-      expect(nearest).toBeLessThan(15);
+      expect(nearest).toBeLessThan(40); // a big block puts out a crowd, who spread further
     }
   });
 

@@ -20,6 +20,7 @@ City scale (a survivor, a city of people, a horde, a clock), all in metres, x ea
 | `player.ts`     | The survivor: walking, sprinting, stamina, aiming (one step at a time)                                 |
 | `horde.ts`      | Thousands of zombies: eyes, ears and nose; wander, investigate, chase, attack; other targets           |
 | `population.ts` | The city's people, counted per building (well, bitten, turned), and the outbreak inside each one       |
+| `daylight.ts`   | The clock: how dark it is at each hour, how many people are out, how frightened the city is            |
 | `humans.ts`     | The few percent of people in the street, as individuals: stroll, flee, go indoors, get bitten, turn    |
 | `game.ts`       | One game: two guns, noise, supplies, hunger, shelters, the outbreak, the clock, losing, events         |
 
@@ -52,9 +53,20 @@ a real density times the area, shared between buildings by floor area and kind (
 building has a door (`findDoor`, the same one a place uses) with some strength, bigger for bigger
 buildings.
 
-A few percent of each building's people are out in the street at the start, as individuals in
-`humans.ts` (at most `GAME.streetPeople`). They are the only people with positions, so the cost does not
-grow with the size of the city.
+Some of each building's people are out in the street, as individuals in `humans.ts` (at most
+`GAME.streetPeople`). They are the only people with positions, so the cost does not grow with the size
+of the city. How many are out follows the hour (`outdoorShare` in `daylight.ts`: about 1.5% in the small
+hours, up to 14% in the morning rush and the evening), less the more of the city has turned (`fear`).
+Once a second (`stepRoutine`) the street is brought toward that number: people leave buildings with no
+dead in them, or those out are sent home (`HState.HOME`: to the nearest shut door within 90 m, briskly;
+a person who cannot find one strolls on). Nobody is made or lost: each is counted in the building they
+leave or go back into.
+
+**The day** (`daylight.ts`) is a clock on the game, an hour a minute, started at 8. The scene gives the
+game the real sunrise and sunset over the place, and `nightness` is 0 by day and 1 at night with an
+hour and a half of twilight. The horde takes it as `HordeContext.night` and `NIGHT` says what it does:
+faster hunting and roaming, less rest, keener hearing and smell, a wider alert, quicker and harder
+strikes; and `stepOutbreak` bites more often indoors. With `night` 0 (or left out) nothing changes.
 
 Once a second (`stepOutbreak`), inside every building that has anyone bitten or turned: the bitten turn
 after about 14 s; the turned bite the well at a rate per second; some of the well run out into the
@@ -79,12 +91,14 @@ strength (and the survivor may be behind it too).
 2. Footsteps make noise: sprinting carries far, walking a little, standing still none.
 3. Switch gun, reload, fire (hit-scan rays, blocked by walls; a shotgun fires eight) or swing the melee
    weapon when dry, shove, use a door (radar, shelter, shop, armory), pick up supplies.
-4. Hunger: food drains; at zero the survivor starves and nothing heals.
+4. Hunger: food drains; at zero the survivor starves and nothing heals. The clock moves on, and with
+   it how dark it is.
 5. Index where the zombies are, step the people in the street (`stepHumans`: look, flee, go in, stagger,
    turn), then fill the target slots (each person in the street, each door with someone well behind it).
 6. Step the horde (`stepHorde`: each zombie thinks every 12th step, then moves, strikes or waits), and
    apply what zombies did: people bitten, doors battered or bitten through.
-7. Once a second: the outbreak moves on inside every building, and the city is counted.
+7. Once a second: the outbreak moves on inside every building (faster at night), people go out or
+   come home as the hour calls for, and the city is counted.
 8. Check for death (health 0). Queue events for the renderer.
 
 The horde's senses: a zombie sees you if you are in front of it, in range, with a clear line; smells you

@@ -238,3 +238,79 @@ describe('the street as a whole', () => {
     expect(play()).toBe(play());
   });
 });
+
+describe('people going home', () => {
+  const house: PlaceBuilding = { id: 1, outer: box(30, -10, 20, 20), height: 8, kind: 'house' };
+
+  /** Someone set going home `away` metres from the house's door, along the street. */
+  const sentHome = (away: number, extra: PlaceBuilding[] = [house]) => {
+    const t = street(extra);
+    const door = { x: t.outbreak.doorX[0], y: t.outbreak.doorY[0] };
+    const side = door.x < 40 ? -1 : 1;
+    const i = spawnHuman(t.humans, door.x + side * away, door.y, HState.HOME);
+    t.humans.timer[i] = HUMAN.homePatience;
+    return { ...t, i, door };
+  };
+
+  it('walk to the nearest door, briskly, and go in', () => {
+    const t = sentHome(30);
+    t.run(10);
+    expect(t.entered).toEqual([]); // still on the way
+    expect(t.humans.state[t.i]).toBe(HState.HOME);
+    expect(Math.hypot(t.humans.vx[t.i], t.humans.vy[t.i])).toBeGreaterThan(HUMAN.walk);
+    t.run(30);
+    expect(t.entered).toEqual([0]);
+    expect(t.humans.state[t.i]).toBe(HState.FREE);
+    expect(t.humans.alive).toBe(0);
+  });
+
+  it('stroll on when there is no door within reach', () => {
+    const t = street();
+    const i = spawnHuman(t.humans, 0, 0, HState.HOME);
+    t.humans.timer[i] = HUMAN.homePatience;
+    t.run(1);
+    expect(t.humans.state[i]).toBe(HState.WALK);
+    expect(t.entered).toEqual([]);
+  });
+
+  it('stroll on when the door is too far', () => {
+    const t = sentHome(HUMAN.homeRange + 40);
+    t.run(1);
+    expect(t.humans.state[t.i]).toBe(HState.WALK);
+  });
+
+  it('give up after a while rather than walk at a wall for ever', () => {
+    const t = sentHome(30);
+    t.humans.timer[t.i] = 0.5;
+    t.run(2);
+    expect(t.humans.state[t.i]).not.toBe(HState.HOME);
+    expect(t.entered).toEqual([]);
+  });
+
+  it('do not go in at a door that has been broken down', () => {
+    const t = sentHome(20);
+    t.outbreak.open[0] = 1;
+    t.run(5);
+    expect(t.entered).toEqual([]);
+    expect(t.humans.state[t.i]).not.toBe(HState.FREE);
+  });
+
+  it('still run from a zombie they see, and can be bitten', () => {
+    const t = sentHome(20);
+    t.zombie(t.humans.x[t.i] + 6, t.humans.y[t.i]);
+    t.run(0.6);
+    expect(t.humans.state[t.i]).toBe(HState.FLEE);
+    const u = sentHome(20);
+    expect(biteHuman(u.humans, u.i)).toBe(true);
+    expect(u.humans.state[u.i]).toBe(HState.BITTEN);
+    expect(u.humans.alive).toBe(0);
+  });
+
+  it('stay out of the walls on the way', () => {
+    const t = sentHome(30);
+    for (let s = 0; s < 40; s++) {
+      t.run(1);
+      expect(insideBuilding(t.colliders, t.humans.x[t.i], t.humans.y[t.i])).toBe(false);
+    }
+  });
+});
