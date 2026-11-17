@@ -69,7 +69,7 @@ function buildWheels(): BufferGeometry {
   const parts: BufferGeometry[] = [];
   for (const sx of [-1, 1]) {
     for (const sz of [-1, 1]) {
-      const wheel = new CylinderGeometry(0.33, 0.33, 0.24, 10);
+      const wheel = new CylinderGeometry(0.33, 0.33, 0.24, 7); // thousands of them: few sides
       wheel.rotateX(Math.PI / 2);
       wheel.translate(sx * CAR.length * 0.31, 0.33, sz * (CAR.width / 2 + 0.02));
       parts.push(wheel);
@@ -121,29 +121,59 @@ export function createCarRenderer(max: number): CarRenderer {
   object.add(bodies, wheels, lamps);
   const dummy = new Object3D();
 
+  // Thousands of cars stand still: their matrices are written once, when the list changes (a new
+  // window, a car summoned), and each frame only the car being driven (and the one just left) is placed.
+  let lastCars: readonly Car[] | null = null;
+  let lastCount = -1;
+  let lastDriving = -1;
+  const place = (
+    i: number,
+    car: Car,
+    px: number,
+    py: number,
+    heading: number,
+    lamp: Color,
+  ): void => {
+    // city (x, y) is Three.js (x, -y); the model points down +X, so the heading is the turn about Y
+    dummy.position.set(px, 0, -py);
+    dummy.rotation.set(0, heading, 0);
+    dummy.updateMatrix();
+    bodies.setMatrixAt(i, dummy.matrix);
+    wheels.setMatrixAt(i, dummy.matrix);
+    lamps.setMatrixAt(i, dummy.matrix);
+    bodies.setColorAt(i, wrecked(car) ? WRECK : PAINTS[i % PAINTS.length]);
+    lamps.setColorAt(i, lamp);
+  };
+  const flush = (): void => {
+    bodies.instanceMatrix.needsUpdate = true;
+    wheels.instanceMatrix.needsUpdate = true;
+    lamps.instanceMatrix.needsUpdate = true;
+    if (bodies.instanceColor) bodies.instanceColor.needsUpdate = true;
+    if (lamps.instanceColor) lamps.instanceColor.needsUpdate = true;
+  };
+
   return {
     object,
     update(cars, driving, x, y, heading, lit) {
       const n = Math.min(max, cars.length);
-      for (let i = 0; i < n; i++) {
-        const car = cars[i];
-        const mine = i === driving;
-        // city (x, y) is Three.js (x, -y); the model points down +X, so the heading is the turn about Y
-        dummy.position.set(mine ? x : car.x, 0, -(mine ? y : car.y));
-        dummy.rotation.set(0, mine ? heading : car.heading, 0);
-        dummy.updateMatrix();
-        bodies.setMatrixAt(i, dummy.matrix);
-        wheels.setMatrixAt(i, dummy.matrix);
-        lamps.setMatrixAt(i, dummy.matrix);
-        bodies.setColorAt(i, wrecked(car) ? WRECK : PAINTS[i % PAINTS.length]);
-        lamps.setColorAt(i, mine && lit && !wrecked(car) ? LAMP_ON : LAMP_OFF);
+      if (cars !== lastCars || n !== lastCount) {
+        for (let i = 0; i < n; i++)
+          place(i, cars[i], cars[i].x, cars[i].y, cars[i].heading, LAMP_OFF);
+        bodies.count = wheels.count = lamps.count = n;
+        lastCars = cars;
+        lastCount = n;
+        lastDriving = -1;
+      } else if (lastDriving >= 0 && lastDriving !== driving && lastDriving < n) {
+        // just got out: that car stands where the game left it
+        const c = cars[lastDriving];
+        place(lastDriving, c, c.x, c.y, c.heading, LAMP_OFF);
       }
-      bodies.count = wheels.count = lamps.count = n;
-      bodies.instanceMatrix.needsUpdate = true;
-      wheels.instanceMatrix.needsUpdate = true;
-      lamps.instanceMatrix.needsUpdate = true;
-      if (bodies.instanceColor) bodies.instanceColor.needsUpdate = true;
-      if (lamps.instanceColor) lamps.instanceColor.needsUpdate = true;
+      if (driving >= 0 && driving < n) {
+        const c = cars[driving];
+        place(driving, c, x, y, heading, lit && !wrecked(c) ? LAMP_ON : LAMP_OFF);
+      }
+      lastDriving = driving;
+      flush();
     },
     dispose() {
       bodyGeometry.dispose();

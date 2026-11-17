@@ -60,8 +60,13 @@ export const CAR = {
   reach: 2.4,
   /** Parking: roads at least this wide carry cars, this far apart, up to this many per window. */
   parkWidth: 3.5,
-  parkGap: 35,
-  parkMost: 400 as number,
+  /** Kerbside parking: a slot every `parkSlot` metres along each kerb, about `parkFill` of them taken, never two cars closer than `parkApart`. */
+  parkSlot: 7,
+  parkFill: 0.5,
+  parkApart: 5.5,
+  /** Roads this wide have cars along both kerbs; narrower ones along one. */
+  parkBothFrom: 7,
+  parkMost: 6000 as number,
 } as const;
 
 export interface Car {
@@ -219,10 +224,11 @@ export function stepOutSpot(car: Car, world: GameWorld, radius: number): [number
 }
 
 /**
- * Cars parked along the map's roads: every so often along each road wide enough, on its right-hand
- * side, pointing along it, with room to stand round them, far from each other, and never more than
- * `most`. Seeded, so the same map and seed give the same cars. `keepOff` marks ground not to park on
- * (the part of a bigger city already seen, when a window moves).
+ * Cars parked along the map's roads, as in a city: along the kerbs of every road wide enough (both
+ * kerbs of a wide one), about every other slot, pointing along the kerb they are on, with room to stand
+ * round them, never on top of each other, and never more than `most`. Seeded, so the same map and seed
+ * give the same cars. `keepOff` marks ground not to park on (the part of a bigger city already seen,
+ * when a window moves).
  */
 export function parkCars(
   world: GameWorld,
@@ -232,14 +238,30 @@ export function parkCars(
 ): Car[] {
   const cars: Car[] = [];
   const half = world.colliders.half;
-  const gap2 = CAR.parkGap * CAR.parkGap;
-  const spaced = (x: number, y: number): boolean =>
-    cars.every((c) => (c.x - x) ** 2 + (c.y - y) ** 2 >= gap2);
+  // cars already parked, by cell of `parkApart` metres, so "is anything too near?" looks at nine cells
+  const cell = CAR.parkApart;
+  const apart2 = cell * cell;
+  const taken = new Map<number, Car[]>();
+  const keyOf = (x: number, y: number): number =>
+    Math.floor((x + half) / cell) * 65536 + Math.floor((y + half) / cell);
+  const spaced = (x: number, y: number): boolean => {
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const near = taken.get(keyOf(x + dx * cell, y + dy * cell));
+        if (!near) continue;
+        for (const c of near) if ((c.x - x) ** 2 + (c.y - y) ** 2 < apart2) return false;
+      }
+    }
+    return true;
+  };
   const roads = world.roads.filter((r) => r.width >= CAR.parkWidth && r.points.length >= 4);
-  // a spot about every `parkGap` metres of road, in a seeded order, so no part of the map is favoured
+  // a slot every `parkSlot` metres along each kerb (both kerbs of a wide road), about half of them
+  // taken, in a seeded order, so no part of the map is favoured
   const spots: [number, number, number][] = [];
   for (const r of roads) {
-    let along = nextFloat(rng) * CAR.parkGap; // start at a random point on the first stretch
+    const offset = Math.max(0, r.width / 2 - 1.5); // a lane in from the edge, or the middle of a narrow road
+    const sides = r.width >= CAR.parkBothFrom ? [1, -1] : [1];
+    let along = nextFloat(rng) * CAR.parkSlot; // start at a random point on the first stretch
     for (let i = 0; i + 3 < r.points.length; i += 2) {
       const ax = r.points[i];
       const ay = r.points[i + 1];
@@ -249,13 +271,16 @@ export function parkCars(
       if (len < 1e-3) continue;
       const ux = (bx - ax) / len;
       const uy = (by - ay) / len;
+      const heading = Math.atan2(uy, ux);
       while (along < len) {
-        // the right-hand verge: a lane in from the edge, or the middle of a narrow road
-        const offset = Math.max(0, r.width / 2 - 1.5);
-        const x = ax + ux * along + uy * offset;
-        const y = ay + uy * along - ux * offset;
-        spots.push([x, y, Math.atan2(uy, ux)]);
-        along += CAR.parkGap;
+        for (const side of sides) {
+          if (nextFloat(rng) >= CAR.parkFill) continue; // an empty slot
+          // the right-hand kerb of this way, or the left one (a car there faces the other way)
+          const x = ax + ux * along + uy * offset * side;
+          const y = ay + uy * along - ux * offset * side;
+          spots.push([x, y, side > 0 ? heading : heading + Math.PI]);
+        }
+        along += CAR.parkSlot;
       }
       along -= len;
     }
@@ -272,7 +297,12 @@ export function parkCars(
     if (Math.abs(x) > half - 12 || Math.abs(y) > half - 12) continue;
     if (keepOff?.(x, y)) continue;
     if (!spaced(x, y) || !validSpot(world, x, y, CAR.radius + 0.4)) continue;
-    cars.push(createCar(x, y, heading, nextRange(rng, CAR.fuelFound[0], CAR.fuelFound[1])));
+    const car = createCar(x, y, heading, nextRange(rng, CAR.fuelFound[0], CAR.fuelFound[1]));
+    cars.push(car);
+    const k = keyOf(x, y);
+    const bucket = taken.get(k);
+    if (bucket) bucket.push(car);
+    else taken.set(k, [car]);
   }
   return cars;
 }

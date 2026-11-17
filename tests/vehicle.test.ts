@@ -62,10 +62,10 @@ function walk(g: GameState, world: GameWorld, seconds: number, moveX: number, mo
   }
 }
 
-/** Stand the survivor at a car's door and press F. */
+/** Stand the survivor at a car's door (right by it: the kerbs are full of others) and press F. */
 function getIn(g: GameState, world: GameWorld, car: number): GameEvent[] {
   const c = g.cars[car];
-  g.player = { ...g.player, x: c.x, y: c.y + CAR.radius + 1, vx: 0, vy: 0 };
+  g.player = { ...g.player, x: c.x, y: c.y + 0.5, vx: 0, vy: 0 };
   stepGame(g, { ...NO_INPUT, interact: true }, world, DT);
   return drainEvents(g);
 }
@@ -84,15 +84,21 @@ describe('cars parked in the streets', () => {
       expect(car.fuel).toBeGreaterThanOrEqual(CAR.fuelFound[0]);
       expect(car.fuel).toBeLessThanOrEqual(CAR.fuelFound[1]);
       expect(car.hp).toBe(CAR.hp);
-      // along the road (east or west), on its right-hand side
+      // along the road, at the kerb, facing the way of the kerb it is on (right-hand traffic)
       expect(Math.abs(Math.sin(car.heading))).toBeLessThan(1e-6);
       const roadY = Math.abs(car.y) < 200 ? 0 : -400;
-      expect(Math.abs(Math.abs(car.y - roadY) - (4 - 1.5))).toBeLessThan(1e-6);
+      const side = car.y - roadY;
+      expect(Math.abs(Math.abs(side) - (4 - 1.5))).toBeLessThan(1e-6);
+      expect(Math.sign(Math.cos(car.heading))).toBe(side < 0 ? 1 : -1);
     }
+    // both kerbs are used, and plenty of them: a city street
+    expect(g.cars.some((c) => c.y < 0 && c.y > -200)).toBe(true);
+    expect(g.cars.some((c) => c.y > 0)).toBe(true);
+    expect(g.cars.length).toBeGreaterThan(2800 / 20);
     for (let i = 0; i < g.cars.length; i++) {
       for (let j = i + 1; j < g.cars.length; j++) {
         const d = Math.hypot(g.cars[i].x - g.cars[j].x, g.cars[i].y - g.cars[j].y);
-        expect(d).toBeGreaterThanOrEqual(CAR.parkGap);
+        expect(d).toBeGreaterThanOrEqual(CAR.parkApart);
       }
     }
     expect(g.driving).toBe(-1);

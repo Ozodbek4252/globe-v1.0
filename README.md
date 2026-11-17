@@ -233,8 +233,8 @@ behind a door works, but it does not win the game.
   a walk but slower than a sprint; at night both are a quarter faster. The people of the city stroll at
   about 1.25 and run at about 4.1, so a walker never catches them in the open and a runner always does.
   Zombies hanging on slow you down, and they never stand in each other's space: a crowd spreads out.
-- **Cars.** Cars stand parked along the real roads (a few dozen in view, each with some fuel in the
-  tank). Walk up to one and press `F` to get in; then `W` is the pedal, `S` the brake (and reverse,
+- **Cars.** Cars stand parked along the kerbs of the real roads, as in any city (thousands in view,
+  each with some fuel in the tank). Walk up to one and press `F` to get in; then `W` is the pedal, `S` the brake (and reverse,
   once stopped), `A` and `D` the wheel, as in any driving game (a car turns only while it rolls);
   `F` gets you out. On a road it does
   nearly 80 km/h, off one about 30; it slides along walls and never crosses one, and a hard crash
