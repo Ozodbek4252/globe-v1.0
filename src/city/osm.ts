@@ -558,6 +558,12 @@ export interface ConvertOptions {
   /** [longitude, latitude] */
   center: [number, number];
   halfSize: number;
+  /**
+   * For a tile of a bigger city: where this square's centre is, in metres east and north of `center`.
+   * Everything is projected from `center` (so neighbouring tiles line up to the millimetre) and then
+   * shifted so the tile's own centre is (0, 0). The offset is written into the output as `origin`.
+   */
+  origin?: Point;
   /** ISO date stamped into the output. */
   generated: string;
 }
@@ -617,7 +623,12 @@ function relationShapes(
 /** Turn an Overpass extract into CityData. Output order is by OSM id, so re-runs diff cleanly. */
 export function convertOverpass(response: OverpassResponse, options: ConvertOptions): CityData {
   const { halfSize } = options;
-  const project = makeProjector(options.center[0], options.center[1]);
+  const fromCenter = makeProjector(options.center[0], options.center[1]);
+  const [ox, oy] = options.origin ?? [0, 0];
+  const project = (lonV: number, latV: number): Point => {
+    const p = fromCenter(lonV, latV);
+    return [p[0] - ox, p[1] - oy];
+  };
   const inside = ([x, y]: Point): boolean => Math.abs(x) <= halfSize && Math.abs(y) <= halfSize;
   const elements = [...response.elements].sort((a, b) => a.id - b.id);
 
@@ -750,6 +761,7 @@ export function convertOverpass(response: OverpassResponse, options: ConvertOpti
     name: options.name,
     center: options.center,
     halfSize,
+    ...(options.origin ? { origin: [round1(ox), round1(oy)] as [number, number] } : {}),
     buildings,
     roads,
     areas,

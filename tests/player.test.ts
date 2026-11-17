@@ -1,10 +1,9 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { LAMP_STRIDE, placeLamps } from '../src/city/lamps';
 import { buildOccupancy } from '../src/city/occupancy';
 import { TREE_STRIDE, placeTrees } from '../src/city/trees';
 import type { CityData } from '../src/city/types';
+import { loadTashkent } from './helpers/tashkent';
 import { hash01 } from '../src/lib/hash';
 import { buildColliders, findSpawn, inWater } from '../src/sim/colliders';
 import { pointInFlatRing } from '../src/sim/grid';
@@ -230,7 +229,7 @@ describe('determinism', () => {
 });
 
 describe('a long walk through the real Tashkent', () => {
-  const city = JSON.parse(readFileSync(resolve('public/cities/tashkent.json'), 'utf8')) as CityData;
+  const city = loadTashkent().city;
   const grid = buildOccupancy(city, 2);
   const lamps = placeLamps(city, grid);
   const trees = placeTrees(city, grid);

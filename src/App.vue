@@ -194,6 +194,7 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', syncFromHash));
     :city-id="mountedId"
     :title="cityPlace?.name ?? mountedId"
     :density="cityPlace?.density"
+    :tiled="cityPlace?.tiled"
     :active="cityId === mountedId"
     @close="closeCity"
     @zoom-out="zoomedOut"

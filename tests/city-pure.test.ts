@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   MAX_DISTANCE,
@@ -21,7 +19,7 @@ import { buildOccupancy } from '../src/city/occupancy';
 import { footprintArea } from '../src/city/geometry';
 import { localSun, skyPalette, sunDirection } from '../src/city/sunlight';
 import { MAX_TREES, TREE_STRIDE, placeTrees } from '../src/city/trees';
-import type { CityData } from '../src/city/types';
+import { loadTashkent } from './helpers/tashkent';
 import {
   OCC_BUILDING,
   OCC_ROAD,
@@ -31,7 +29,7 @@ import {
   occupancyAt,
 } from '../src/sim/grid';
 
-const city = JSON.parse(readFileSync(resolve('public/cities/tashkent.json'), 'utf8')) as CityData;
+const city = loadTashkent().city;
 const [LON, LAT] = city.center;
 
 describe('sun over Tashkent', () => {

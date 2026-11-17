@@ -25,7 +25,14 @@ import RadarScope from './RadarScope.vue';
 
 /** `active` false puts the scene to sleep (the globe is showing); it wakes paused when true again. */
 const props = withDefaults(
-  defineProps<{ cityId: string; title: string; density?: number; active?: boolean }>(),
+  defineProps<{
+    cityId: string;
+    title: string;
+    density?: number;
+    active?: boolean;
+    /** The place is a whole city in tiles: load the window around the start, not one file. */
+    tiled?: boolean;
+  }>(),
   { active: true, density: undefined },
 );
 const emit = defineEmits<{
@@ -194,12 +201,15 @@ onMounted(async () => {
   root.value?.focus();
   try {
     // Three.js and the city code are only downloaded when the player enters the city.
-    const [{ loadCity }, { createCityScene }] = await Promise.all([
+    const [{ loadCity, loadTileIndex, loadTiledWindow }, { createCityScene }] = await Promise.all([
       import('../city/load'),
       import('../city/createCity'),
     ]);
     const [data, resume] = await Promise.all([
-      loadCity(props.cityId).then(markRaw),
+      (props.tiled
+        ? loadTileIndex(props.cityId).then((index) => loadTiledWindow(index, [0, 0], 1))
+        : loadCity(props.cityId)
+      ).then(markRaw),
       getSave(props.cityId), // a game saved here earlier carries on where it left off
     ]);
     if (disposed || !host.value) return;

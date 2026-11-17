@@ -88,6 +88,11 @@ export interface CityData {
   center: [number, number];
   /** The playable area is the square from -halfSize to +halfSize on both axes, in metres. */
   halfSize: number;
+  /**
+   * For a tile of a bigger city: where this square's centre is, in metres east and north of `center`
+   * (the whole city's origin). Absent for a map that stands on its own.
+   */
+  origin?: [number, number];
   buildings: CityBuilding[];
   roads: CityRoad[];
   areas: CityArea[];

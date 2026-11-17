@@ -1,6 +1,7 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { parseTileIndex } from '../src/city/tiles';
 import type { CityData } from '../src/city/types';
 import {
   cityHash,
@@ -24,6 +25,7 @@ const good = {
   density: 21000,
   kind: 'city',
   blurb: 'A city.',
+  tiled: false,
 };
 
 describe('the list of places', () => {
@@ -153,6 +155,24 @@ describe('the places that ship with the game', () => {
   });
 
   it.each(places.map((p) => [p.id, p] as const))('%s has a map file that matches', (id, place) => {
+    if (place.tiled) {
+      // a whole city in tiles: the index, and every tile it lists
+      const index = parseTileIndex(
+        JSON.parse(readFileSync(resolve(`public/cities/${id}/index.json`), 'utf8')) as unknown,
+      );
+      expect(index).not.toBeNull();
+      if (!index) return;
+      expect(index.id).toBe(id);
+      expect(index.name).toBe(place.name);
+      expect(index.center[0]).toBeCloseTo(place.lon, 2);
+      expect(index.center[1]).toBeCloseTo(place.lat, 2);
+      expect(index.tiles.length).toBeGreaterThan(50);
+      expect(index.tiles.some((t) => t.tx === 0 && t.ty === 0)).toBe(true); // the start
+      for (const t of index.tiles)
+        expect(existsSync(resolve(`public/cities/${id}/${t.file}`))).toBe(true);
+      expect(index.attribution).toMatch(/OpenStreetMap/);
+      return;
+    }
     const city = JSON.parse(readFileSync(resolve(`public/cities/${id}.json`), 'utf8')) as CityData;
     expect(city.version).toBe(1);
     expect(city.id).toBe(id);
@@ -167,7 +187,10 @@ describe('the places that ship with the game', () => {
 
   it('are described in the data notice', () => {
     const notice = readFileSync(resolve('public/cities/README.md'), 'utf8');
-    for (const p of places) expect(notice, `${p.id}.json in the notice`).toContain(`${p.id}.json`);
+    for (const p of places) {
+      const file = p.tiled ? `${p.id}/` : `${p.id}.json`;
+      expect(notice, `${file} in the notice`).toContain(file);
+    }
   });
 });
 

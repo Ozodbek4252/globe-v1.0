@@ -11,7 +11,7 @@ credit OpenStreetMap, and share the data under the same licence. The game's own 
 
 | File            | Area                                                | Extracted  |
 | --------------- | --------------------------------------------------- | ---------- |
-| `tashkent.json` | 3 km x 3 km around the Tashkent TV Tower (Mirabad)  | 2026-11-17 |
+| `tashkent/`     | The whole of Tashkent, 31 km x 31 km in 899 tiles of 1 km (see below)  | 2026-11-17 |
 | `paris.json`    | 1.6 km x 1.6 km around the Eiffel Tower             | 2026-11-17 |
 | `tokyo.json`    | 1.6 km x 1.6 km around Tokyo Tower (Shiba)          | 2026-11-17 |
 | `newyork.json`  | 1.4 km x 1.4 km around Times Square (Midtown)       | 2026-11-17 |
@@ -26,3 +26,8 @@ a line for its card. A place needs a map file of the same name. Add one with `sc
 (see the header of that file) and a line in `index.json`; the tests check that the two agree.
 
 Regenerate with `scripts/fetch-city.mjs`.
+
+`tashkent/` is a tiled city: `index.json` lists the tiles and each `t_<x>_<y>.json.gz` is one square
+kilometre in the same format as the single files, with its centre's offset from the city's origin in
+`origin`. The game streams the tiles around the survivor. They were cut from the Geofabrik Uzbekistan
+extract with `osmium` and `scripts/tile-city.mjs` (see the header of that file).

@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   FACADE,
@@ -16,7 +14,8 @@ import {
   triangulate,
   type MeshData,
 } from '../src/city/geometry';
-import type { CityBuilding, CityData } from '../src/city/types';
+import type { CityBuilding } from '../src/city/types';
+import { loadTashkent } from './helpers/tashkent';
 
 const sq = (x: number, y: number, w: number, h = w): number[] => [
   x,
@@ -315,7 +314,7 @@ describe('revolved shapes and towers', () => {
 });
 
 describe('the real Tashkent file', () => {
-  const city = JSON.parse(readFileSync(resolve('public/cities/tashkent.json'), 'utf8')) as CityData;
+  const city = loadTashkent().city;
 
   it('builds into well-formed meshes with every face the right way round', () => {
     const tiles = chunkBuildings(city.buildings, 250);

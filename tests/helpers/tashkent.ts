@@ -2,11 +2,13 @@
 // independent "is this point inside a building?" check that does not use the game's own grids, so a
 // bug in those cannot hide itself. Each is built once and shared.
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 import { LAMP_STRIDE, placeLamps } from '../../src/city/lamps';
 import { buildOccupancy } from '../../src/city/occupancy';
 import { TREE_STRIDE, placeTrees } from '../../src/city/trees';
+import { mergeTiles, parseTileIndex, tileKey, windowTiles } from '../../src/city/tiles';
 import type { CityData } from '../../src/city/types';
 import { buildColliders, findSpawn, type Colliders } from '../../src/sim/colliders';
 import { pointInFlatRing } from '../../src/sim/grid';
@@ -23,11 +25,32 @@ const cache = new Map<string, TestCity>();
 
 export const loadTashkent = (): TestCity => loadCityById('tashkent');
 
-/** Any city in public/cities, by id. */
+/** A tiled city's window of 3 by 3 tiles around its origin, read straight from the files. */
+function readTiledWindow(id: string): CityData {
+  const index = parseTileIndex(
+    JSON.parse(readFileSync(resolve(`public/cities/${id}/index.json`), 'utf8')) as unknown,
+  );
+  if (!index) throw new Error(`${id}: bad tile index`);
+  const have = new Map(index.tiles.map((t) => [tileKey(t.tx, t.ty), t]));
+  const tiles = windowTiles(0, 0, 1)
+    .map(([tx, ty]) => have.get(tileKey(tx, ty)))
+    .filter((t) => t !== undefined)
+    .map(
+      (t) =>
+        JSON.parse(
+          gunzipSync(readFileSync(resolve(`public/cities/${id}/${t.file}`))).toString('utf8'),
+        ) as CityData,
+    );
+  return mergeTiles(index, tiles, [0, 0], 1);
+}
+
+/** Any city in public/cities, by id: one file, or the window round the origin of a tiled one. */
 export function loadCityById(id: string): TestCity {
   const cached = cache.get(id);
   if (cached) return cached;
-  const city = JSON.parse(readFileSync(resolve(`public/cities/${id}.json`), 'utf8')) as CityData;
+  const city = existsSync(resolve(`public/cities/${id}/index.json`))
+    ? readTiledWindow(id)
+    : (JSON.parse(readFileSync(resolve(`public/cities/${id}.json`), 'utf8')) as CityData);
   const grid = buildOccupancy(city, 2);
   const lamps = placeLamps(city, grid);
   const trees = placeTrees(city, grid);

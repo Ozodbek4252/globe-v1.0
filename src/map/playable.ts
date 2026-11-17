@@ -22,6 +22,8 @@ export interface Playable {
   kind: PlaceKind;
   /** A line about the place, for the card. */
   blurb: string;
+  /** The place is a whole city cut into tiles (`public/cities/<id>/index.json`), streamed as you go. */
+  tiled: boolean;
 }
 
 const isNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -53,6 +55,7 @@ export function parsePlayable(raw: unknown): Playable[] {
       density: r.density,
       kind: r.kind === 'village' ? 'village' : 'city',
       blurb: typeof r.blurb === 'string' ? r.blurb : '',
+      tiled: r.tiled === true,
     });
   }
   return out;
