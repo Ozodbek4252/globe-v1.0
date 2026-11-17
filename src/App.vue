@@ -29,7 +29,7 @@ const coords = computed(
 );
 
 // The places you can play are pins on the globe (and a list), and what has happened in each shows on
-// both: a place you died in has fallen, and its lights go out.
+// both: a place where nobody is left has fallen, and its lights go out.
 watch(play.markers, (markers) => g.setMarkers(markers), { immediate: true });
 watch(play.chosenId, (id) => g.setChosenMarker(id), { immediate: true });
 
@@ -210,8 +210,9 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', syncFromHash));
       play.markInPlay(mountedId as string, 0);
     "
     @over="
-      (seconds) => {
-        play.died(mountedId as string, seconds);
+      (seconds, fallen) => {
+        if (fallen) play.fell(mountedId as string, seconds);
+        else play.died(mountedId as string, seconds);
         cityOver = true;
       }
     "

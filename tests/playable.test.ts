@@ -12,6 +12,7 @@ import {
   parsePlayable,
   reclaim,
   recordDeath,
+  recordFall,
   serializeOutcomes,
   type Outcomes,
 } from '../src/map/playable';
@@ -87,27 +88,37 @@ describe('the list of places', () => {
 });
 
 describe('what happened in a place', () => {
-  it('falls when you die there, and remembers the longest you lasted', () => {
+  it('counts your deaths there and remembers the longest you lasted; the city goes on', () => {
     let o: Outcomes = {};
     o = recordDeath(o, 'paris', 187.9);
-    expect(o.paris).toEqual({ best: 187, fallen: true, deaths: 1 });
+    expect(o.paris).toEqual({ best: 187, fallen: false, deaths: 1 });
     o = recordDeath(o, 'paris', 95);
-    expect(o.paris).toEqual({ best: 187, fallen: true, deaths: 2 });
+    expect(o.paris).toEqual({ best: 187, fallen: false, deaths: 2 });
     o = recordDeath(o, 'paris', 240);
     expect(o.paris.best).toBe(240);
   });
 
+  it('falls when nobody is left in it, which ends the game there', () => {
+    let o: Outcomes = markInPlay(recordDeath({}, 'paris', 100), 'paris', 300);
+    expect(o.paris.inPlay).toBe(300);
+    o = recordFall(o, 'paris', 412.6);
+    expect(o.paris).toEqual({ best: 412, fallen: true, deaths: 1 });
+    // dying in a fallen place (a new game there) does not pick it back up
+    expect(recordDeath(o, 'paris', 10).paris.fallen).toBe(true);
+    expect(recordFall({}, 'oia', 60).oia).toEqual({ best: 60, fallen: true, deaths: 0 });
+  });
+
   it('keeps each place on its own, and never changes what it was given', () => {
     const before: Outcomes = { paris: { best: 100, fallen: true, deaths: 1 } };
-    const after = recordDeath(before, 'tokyo', 50);
+    const after = recordFall(before, 'tokyo', 50);
     expect(Object.keys(after).sort()).toEqual(['paris', 'tokyo']);
     expect(Object.keys(before)).toEqual(['paris']);
     expect(after.paris).toBe(before.paris);
   });
 
   it('can be reclaimed: the lights come on but the record stays', () => {
-    const o = reclaim(recordDeath({}, 'paris', 120), 'paris');
-    expect(o.paris).toEqual({ best: 120, fallen: false, deaths: 1 });
+    const o = reclaim(recordFall(recordDeath({}, 'paris', 120), 'paris', 130), 'paris');
+    expect(o.paris).toEqual({ best: 130, fallen: false, deaths: 1 });
   });
 
   it('has nothing to reclaim in a place never played', () => {
@@ -209,7 +220,11 @@ describe('a game going on at a place', () => {
     o = recordDeath(o, 'paris', 90);
     expect(o.paris.inPlay).toBe(70);
     expect(o.paris.best).toBe(90);
-    expect(o.paris.fallen).toBe(true);
+    expect(o.paris.fallen).toBe(false);
+    // once nobody is left there, the game is over: nothing is in play any more
+    const gone = recordFall(o, 'paris', 95);
+    expect(gone.paris.inPlay).toBeUndefined();
+    expect(gone.paris.fallen).toBe(true);
   });
 
   it('leaves a record alone that has nothing to clear', () => {

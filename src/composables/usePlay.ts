@@ -8,6 +8,7 @@ import {
   parseOutcomes,
   reclaim,
   recordDeath,
+  recordFall,
   serializeOutcomes,
   type Outcomes,
   type Playable,
@@ -67,8 +68,10 @@ export function usePlay() {
     choose: (id: string | null): void => {
       chosenId.value = id !== null && byId.value.has(id) ? id : null;
     },
-    /** The survivor died in this place, after this many seconds: it falls. */
+    /** The survivor died in this place, after this many seconds. The city goes on. */
     died: (id: string, seconds: number): void => save(recordDeath(outcomes.value, id, seconds)),
+    /** Nobody is left in this place: it has fallen, and its lights go out. */
+    fell: (id: string, seconds: number): void => save(recordFall(outcomes.value, id, seconds)),
     /** Take a fallen place back. */
     reclaim: (id: string): void => save(reclaim(outcomes.value, id)),
     /** A game is going on at this place, `seconds` in (0 when it has stopped). */

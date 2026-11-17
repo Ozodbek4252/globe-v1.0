@@ -35,6 +35,7 @@ import { utcOffsetHours } from '../lib/sun';
 import { buildColliders, findSpawn, type Colliders } from '../sim/colliders';
 import { DAY, nightness, wrapHour } from '../sim/daylight';
 import {
+  countPopulation,
   createGame,
   createGameWorld,
   drainEvents,
@@ -59,6 +60,7 @@ import { speedOf, type PlayerState } from '../sim/player';
 import { isSavedGame, loadGame, saveGame, type SavedGame } from '../sim/save';
 import { CAR, createCar, onRoad, wrecked, type Car } from '../sim/vehicle';
 import {
+  advanceLedger,
   ledgerOutside,
   migrateGame,
   readLedger,
@@ -246,9 +248,11 @@ export type GameNotice =
       shots: number;
       hits: number;
       damageTaken: number;
-      /** How many of the city's people were still well when the survivor fell, and how many there were. */
+      /** How many of the city's people were still well when it ended, and how many there were. */
       healthy: number;
       initial: number;
+      /** True when the city fell (nobody left in it); false when the survivor died and the city goes on. */
+      fallen: boolean;
     };
 
 /** Levers for staging scenes (screenshots, tests). Only present when the scene is made with `debug: true`. */
@@ -293,6 +297,8 @@ export interface CityDebug {
   cars(): { count: number; driving: number; nearest: number; onRoad: number };
   /** The ledger of a tiled city: how many entries, how many hold a number that is not one, and one such entry. */
   ledger(): { entries: number; broken: number; sample: unknown };
+  /** The outbreak takes everyone: all the city's people turn, here and beyond, so the city falls on the next count. */
+  wipe(): void;
   /** The numbers worth checking. */
   snapshot(): {
     status: GameStatus;
@@ -997,8 +1003,9 @@ export async function createCityScene(
     const k = e.key.toLowerCase();
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     // Enter plays again; on a focused button it already means "press this", so leave it alone there
+    // Enter plays on: the next survivor after a death, a new city after the city has fallen
     if (k === 'enter' && game.status !== 'playing' && !(e.target instanceof HTMLButtonElement))
-      restart();
+      restart(game.status !== 'lost');
     else if (k === 'p') paused = !paused && game.status === 'playing';
     else if (k === 'r' && cameraMode === 'follow') {
       if (!e.repeat) reloadQueued = true;
@@ -1181,6 +1188,8 @@ export async function createCityScene(
         }
         break;
       case 'lost':
+      case 'fallen': {
+        const city = cityPopulation();
         notices.emit({
           type: 'over',
           time: game.time,
@@ -1188,10 +1197,12 @@ export async function createCityScene(
           shots: game.stats.shots,
           hits: game.stats.hits,
           damageTaken: Math.round(game.stats.damageTaken),
-          healthy: cityPopulation().healthy,
-          initial: cityPopulation().initial,
+          healthy: city.healthy,
+          initial: city.initial,
+          fallen: e.type === 'fallen',
         });
         break;
+      }
       default:
         break; // reload, reloaded, empty, shove: no picture yet
     }
@@ -1218,6 +1229,9 @@ export async function createCityScene(
   let debugAutoAim = false;
   let debugFrozen = false;
   let lastMove: [number, number] = [0, 0];
+  /** The game tick the rest of the city was last brought up to date, and how often (20 s). */
+  let ledgerTick = game.tick;
+  const LEDGER_EVERY = 1200;
   function nearestZombie(): [number, number] | null {
     const h = game.horde;
     let best = -1;
@@ -1244,6 +1258,7 @@ export async function createCityScene(
     const p = game.population;
     if (!tiled) return { ...p };
     const beyond = ledgerOutside(ledger, gameWorld);
+    game.beyond = beyond; // so the game knows whether anyone is left out there
     const healthy = p.healthy + beyond.healthy;
     const bitten = p.bitten + beyond.bitten;
     const zombies = p.zombies + beyond.zombies;
@@ -1283,6 +1298,7 @@ export async function createCityScene(
       district.dispose();
       scene.add(built.group);
       game = migrateGame(game, gameWorld, built.world, gameOptions(), [dx, dy], ledger);
+      ledgerTick = game.tick; // migrating brought the rest of the city up to date
       player = previous = game.player;
       district = built;
       colliders = built.colliders;
@@ -1404,6 +1420,12 @@ export async function createCityScene(
       steps++;
     }
     if (steps === 6) simClock = 0; // far behind (a stalled tab): do not try to catch up
+    // the rest of a big city does not stand still while the survivor stays in one part of it
+    if (tiled && game.tick - ledgerTick >= LEDGER_EVERY) {
+      ledgerTick = game.tick;
+      advanceLedger(ledger, game.tick, game.rng);
+      cityPopulation();
+    }
     // the sky follows the game's clock, however it was set (it changes in steps of about a minute)
     if (Math.abs(game.clock - hour) > 0.015) {
       hour = game.clock;
@@ -1827,6 +1849,30 @@ export async function createCityScene(
           },
           freeze(on) {
             debugFrozen = on;
+          },
+          wipe() {
+            const o = game.outbreak;
+            for (let b = 0; b < o.count; b++) {
+              o.undead[b] += o.healthy[b] + o.incubating[b];
+              o.healthy[b] = 0;
+              o.incubating[b] = 0;
+            }
+            // the street's people turn too (counted in the first building, so nobody is lost)
+            const h = game.humans;
+            for (let i = 0; i < h.used; i++) {
+              if (h.state[i] === HState.FREE) continue;
+              h.state[i] = HState.FREE;
+              h.freeList[h.freeCount++] = i;
+              if (o.count > 0) o.undead[0]++;
+            }
+            h.alive = 0;
+            for (const e of ledger.values()) {
+              e.undead += e.healthy + e.incubating;
+              e.healthy = 0;
+              e.incubating = 0;
+            }
+            countPopulation(game);
+            cityPopulation();
           },
           ledger() {
             let broken = 0;

@@ -2,8 +2,8 @@
 //
 // `public/cities/index.json` lists the playable places. Each has a map file next to it
 // (`public/cities/<id>.json`, made by scripts/fetch-city.mjs from OpenStreetMap). What happened to a
-// place is remembered per browser: how long you lasted there, and whether it has fallen (you died in
-// it and the outbreak took it). A fallen place goes dark on the globe until you reclaim it.
+// place is remembered per browser: how long you lasted there, how often you died, and whether it has
+// fallen (the outbreak took everyone). A fallen place goes dark on the globe until you try again there.
 
 import { fetchJson, type JsonLoader } from './data';
 
@@ -104,7 +104,7 @@ export function markInPlay(outcomes: Outcomes, id: string, seconds: number): Out
 
 export type Outcomes = Readonly<Record<string, Outcome>>;
 
-/** You died in a place after `seconds`: it has fallen, and the record is updated. */
+/** You died in a place after `seconds`: the record is updated. The city goes on without you. */
 export function recordDeath(outcomes: Outcomes, id: string, seconds: number): Outcomes {
   const before = outcomes[id];
   // the city goes on without that survivor: a game going on there stays going on
@@ -113,8 +113,24 @@ export function recordDeath(outcomes: Outcomes, id: string, seconds: number): Ou
     [id]: {
       ...before,
       best: Math.max(before?.best ?? 0, Math.max(0, Math.floor(seconds))),
-      fallen: true,
+      fallen: before?.fallen ?? false,
       deaths: (before?.deaths ?? 0) + 1,
+    },
+  };
+}
+
+/** Not a soul is left in a place, after `seconds` of this game: it has fallen, and its lights go out. */
+export function recordFall(outcomes: Outcomes, id: string, seconds: number): Outcomes {
+  const before = outcomes[id];
+  const { inPlay: _over, ...rest } = before ?? { best: 0, fallen: false, deaths: 0 };
+  void _over; // the game there is over
+  return {
+    ...outcomes,
+    [id]: {
+      ...rest,
+      best: Math.max(before?.best ?? 0, Math.max(0, Math.floor(seconds))),
+      fallen: true,
+      deaths: before?.deaths ?? 0,
     },
   };
 }

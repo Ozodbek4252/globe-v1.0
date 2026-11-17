@@ -10,7 +10,8 @@ playable piece is in: click a gold pin on the globe (or pick a place in the side
 here** to drop into a 3D city built from real OpenStreetMap buildings and full of its people, where an
 outbreak has just begun. There are eight places, from Manhattan to a village on Santorini. You steer one
 survivor with a pistol and have to stay alive as long as you can: there is no rescue and no cure. When
-you die the place has fallen, and its lights go out on the globe (see [The world](#the-world), [The 3D
+you die the city goes on and the next survivor steps into it; when not a soul is left in it, the place
+has fallen, and its lights go out on the globe (see [The world](#the-world), [The 3D
 city](#the-3d-city) and [The game](#the-game)). The rules live in [src/sim](src/sim/README.md).
 
 ## Run it
@@ -144,10 +145,12 @@ the horde where it stood, the clock where it got to, the doors that were broken 
 already searched still empty (ground supplies are laid out again). Your score is each survivor's own
 time. **New city** throws the whole place away and starts the outbreak over.
 
-**A place falls when you die in it.** Its pin turns into a red cross, and with the **Lights** layer on, a
-patch of darkness spreads over its glow on the globe. It stays dark, with the longest you lasted, until
-you **Try again** there (which lights it up for the new game). What happened is kept in this browser
-(`localStorage`).
+**A place falls when nobody is left in it.** Dying does not end a city (the next survivor steps into
+it, see [The game](#the-game)); the city ends when not one of its people is left well or turning, here
+or in the parts of a big city that are not loaded. Then the game there is over and its save is thrown
+away, its pin turns into a red cross, and with the **Lights** layer on, a patch of darkness spreads over
+its glow on the globe. It stays dark, with the longest you lasted, until you **Try again** there (a new
+outbreak, which lights it up). What happened is kept in this browser (`localStorage`).
 
 ## The 3D city
 

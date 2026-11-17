@@ -192,7 +192,8 @@ export const GAME = {
 } as const;
 
 /** There is no winning: you play until you die. */
-export type GameStatus = 'playing' | 'lost';
+/** Playing; the survivor is dead (`lost`: the city goes on, another can step in); or the city is gone (`fallen`: nobody left in it). */
+export type GameStatus = 'playing' | 'lost' | 'fallen';
 
 export type WeaponName = 'pistol' | 'shotgun';
 
@@ -274,7 +275,10 @@ export type GameEvent =
       y: number;
       force: number;
     }
-  | { type: 'lost' };
+  /** The survivor is dead. */
+  | { type: 'lost' }
+  /** Not one of the city's people is left well or turning: the city has fallen, and the game is over. */
+  | { type: 'fallen' };
 
 export interface GameInput {
   moveX: number;
@@ -445,6 +449,11 @@ export interface GameState {
   breached: boolean[];
   /** Seconds since the last "door" event, so a beating does not flood the event queue. */
   doorEventTimer: number;
+  /**
+   * The city beyond this map (the rest of a big city, kept in a ledger by the caller): its people, so
+   * the game knows whether anyone is left. All zero when the map is the whole city.
+   */
+  beyond: { healthy: number; bitten: number; zombies: number };
   /** The cars about the city, and which one the survivor is in (-1 on foot). */
   cars: Car[];
   driving: number;
@@ -568,6 +577,7 @@ export function createGame(world: GameWorld, options: GameOptions): GameState {
     doors: world.places.map((p) => (p.kind === 'shelter' ? GAME.shelter.door : 0)),
     breached: world.places.map(() => false),
     doorEventTimer: 0,
+    beyond: { healthy: 0, bitten: 0, zombies: 0 },
     cars: parkCars(world, rng),
     driving: -1,
     engineTimer: 0,
@@ -876,8 +886,19 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
       g.status = 'lost';
       g.player = { ...g.player, vx: 0, vy: 0, sprinting: false };
       emit(g, { type: 'lost' });
+    } else if (cityFallen(g)) {
+      g.status = 'fallen';
+      g.player = { ...g.player, vx: 0, vy: 0, sprinting: false };
+      emit(g, { type: 'fallen' });
     }
   }
+}
+
+/** Whether nobody in the city (here and beyond) is left well or turning: then it is over for the city. */
+export function cityFallen(g: GameState): boolean {
+  const p = g.population;
+  const b = g.beyond;
+  return p.initial > 0 && p.healthy + p.bitten + b.healthy + b.bitten === 0;
 }
 
 /**

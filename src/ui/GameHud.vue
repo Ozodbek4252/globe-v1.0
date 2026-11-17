@@ -155,7 +155,9 @@ function push(n: GameNotice): void {
     case 'over':
       over.value = n;
       banner.value = null;
-      announcement.value = `You died after ${clock(n.time)}.`;
+      announcement.value = n.fallen
+        ? `The city has fallen: nobody is left in it. You lasted ${clock(n.time)}.`
+        : `You died after ${clock(n.time)}.`;
       void nextTick(() => again.value?.focus());
       break;
   }
@@ -326,10 +328,21 @@ const accuracy = computed(() =>
       </div>
     </div>
 
-    <div v-if="over" class="hud-over" role="dialog" aria-modal="true" aria-label="You died">
+    <div
+      v-if="over"
+      class="hud-over"
+      role="dialog"
+      aria-modal="true"
+      :aria-label="over.fallen ? 'The city has fallen' : 'You died'"
+    >
       <div class="hud-card">
-        <h2>You survived {{ survived }}</h2>
-        <p>
+        <h2 v-if="over.fallen">The city has fallen</h2>
+        <h2 v-else>You survived {{ survived }}</h2>
+        <p v-if="over.fallen">
+          Not a soul is left in it. You lasted {{ survived }}, and there is nothing here to come
+          back to.
+        </p>
+        <p v-else>
           There was no rescue coming. The city goes on without you; the next survivor steps into it.
         </p>
         <dl>
@@ -343,10 +356,25 @@ const accuracy = computed(() =>
           <dd>{{ over.damageTaken }}</dd>
         </dl>
         <div class="hud-actions">
-          <button ref="again" class="city-btn primary" type="button" @click="emit('restart')">
+          <button
+            v-if="!over.fallen"
+            ref="again"
+            class="city-btn primary"
+            type="button"
+            @click="emit('restart')"
+          >
             Next survivor <kbd>Enter</kbd>
           </button>
-          <button class="city-btn" type="button" @click="emit('fresh')">New city</button>
+          <button
+            v-if="over.fallen"
+            ref="again"
+            class="city-btn primary"
+            type="button"
+            @click="emit('fresh')"
+          >
+            New city <kbd>Enter</kbd>
+          </button>
+          <button v-else class="city-btn" type="button" @click="emit('fresh')">New city</button>
           <button class="city-btn" type="button" @click="emit('close')">Back to the globe</button>
         </div>
       </div>

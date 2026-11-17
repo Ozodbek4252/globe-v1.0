@@ -39,7 +39,8 @@ const props = withDefaults(
 );
 const emit = defineEmits<{
   close: [];
-  over: [seconds: number];
+  /** The game there ended: the survivor died (the city goes on), or, `fallen`, nobody is left in the city. */
+  over: [seconds: number, fallen: boolean];
   zoomOut: [];
   /** The seconds survived so far (once a second), and a new game begun in place. */
   time: [seconds: number];
@@ -263,8 +264,10 @@ onMounted(async () => {
       // the city goes on after a death (the next survivor steps into it), so it is saved as it is;
       // only a new city throws the old one away
       if (n.type === 'over') {
-        emit('over', n.time);
-        saveNow();
+        emit('over', n.time, n.fallen);
+        // a fallen city is finished: there is nothing to come back to
+        if (n.fallen) void deleteSave(props.cityId);
+        else saveNow();
       }
       if (n.type === 'respawn') {
         emit('restarted');
@@ -510,8 +513,7 @@ onBeforeUnmount(() => {
             <kbd>1</kbd><kbd>2</kbd> gun
           </li>
           <li>
-            <kbd>Space</kbd> shove &nbsp; <kbd>F</kbd> use a door, get in or out of a car (then
-            <kbd>W</kbd><kbd>S</kbd> pedal, <kbd>A</kbd><kbd>D</kbd> steer) &nbsp;
+            <kbd>Space</kbd> shove &nbsp; <kbd>F</kbd> door, or get in a car &nbsp;
             <kbd>L</kbd> flashlight
           </li>
           <li><kbd>Q</kbd><kbd>E</kbd> or right-drag: turn camera &nbsp; <kbd>Wheel</kbd> zoom</li>
