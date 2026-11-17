@@ -123,9 +123,33 @@ export const GAME = {
     runnerChance: 0.05,
     runnerMax: 0.35,
   },
-  pickups: { ammo: 14, ammoAmount: 15, medkit: 6, medkitAmount: 40, radius: 1.5 },
+  pickups: {
+    ammo: 14,
+    ammoAmount: 15,
+    medkit: 6,
+    medkitAmount: 40,
+    food: 10,
+    foodAmount: 35,
+    radius: 1.5,
+    /** The most pickups lying about at once (the ones zombies drop can fill this up). */
+    max: 160,
+  },
+  /** Hunger: food drains steadily; at zero you starve. There is no rescue, so you have to keep finding it. */
+  food: { max: 100, drain: 0.22, starve: 1.2 },
+  /** The fallback when a gun is dry: always there, slower and shorter than a gun, and it takes three to fell a walker. */
+  melee: {
+    range: 1.9,
+    cone: Math.cos((60 * Math.PI) / 180),
+    damage: 34,
+    cooldown: 0.8,
+    knock: 5,
+    stun: 0.5,
+    noise: 7,
+  },
+  /** Chance a zombie killed by you was carrying something (they were people once). */
+  drops: { ammo: 0.13, food: 0.06, medkit: 0.04, ammoAmount: 8 },
   /** What searching a shop or clinic gives (a roll decides which). */
-  loot: { ammo: 24, health: 40, both: 0.2 },
+  loot: { ammo: 24, health: 40, food: 40, both: 0.2 },
   /** Zombies with their hands on you slow you down by this much each, to a floor. */
   grabSlow: 0.18,
   grabFloor: 0.4,
@@ -176,8 +200,10 @@ export function weaponConfig(name: WeaponName): WeaponConfig {
 export interface Pickup {
   x: number;
   y: number;
-  kind: 'ammo' | 'medkit';
+  kind: 'ammo' | 'medkit' | 'food';
   taken: boolean;
+  /** How much it gives, when not the standard amount (a drop from a zombie is smaller). */
+  amount?: number;
 }
 
 export type GameEvent =
@@ -196,9 +222,19 @@ export type GameEvent =
   | { type: 'reloaded' }
   | { type: 'empty' }
   | { type: 'shove'; x: number; y: number; heading: number }
-  | { type: 'pickup'; kind: 'ammo' | 'medkit'; x: number; y: number }
+  /** A swing of the melee weapon (the gun is dry). */
+  | { type: 'swing'; x: number; y: number; heading: number }
+  | { type: 'pickup'; kind: 'ammo' | 'medkit' | 'food'; x: number; y: number }
   /** A shop, clinic or armory was searched: what it gave (`shotgun` when it was the armory's gun). */
-  | { type: 'loot'; place: number; ammo: number; health: number; armory: boolean; shotgun: boolean }
+  | {
+      type: 'loot';
+      place: number;
+      ammo: number;
+      health: number;
+      food: number;
+      armory: boolean;
+      shotgun: boolean;
+    }
   /** The gun in hand changed. */
   | { type: 'weapon'; weapon: WeaponName }
   /** The radar is on: the survivor can see the horde now. */
@@ -312,6 +348,8 @@ export interface GameState {
   reserve: number;
   /** The shotgun has been found. */
   hasShotgun: boolean;
+  /** How well fed the survivor is, 0 to 100. */
+  food: number;
   /** The magazine and spare rounds of the gun that is not in hand. */
   stash: { ammo: number; reserve: number };
   /** Seconds of reloading left; 0 when not reloading. */
@@ -386,6 +424,7 @@ export function createGame(world: GameWorld, options: GameOptions): GameState {
     ammo: GAME.weapon.mag,
     reserve: GAME.weapon.reserve,
     hasShotgun: false,
+    food: GAME.food.max,
     stash: { ammo: 0, reserve: 0 },
     reloading: 0,
     fireCooldown: 0,
@@ -464,11 +503,13 @@ function scatterPickups(g: GameState, world: GameWorld): void {
   const want: Pickup['kind'][] = [];
   for (let i = 0; i < GAME.pickups.ammo; i++) want.push('ammo');
   for (let i = 0; i < GAME.pickups.medkit; i++) want.push('medkit');
-  // the first three have set distances from the start: ammunition near, first aid a bit further
+  for (let i = 0; i < GAME.pickups.food; i++) want.push('food');
+  // the first few have set distances from the start: ammunition near, first aid and food a bit further
   const near: [Pickup['kind'], number, number][] = [
     ['ammo', 35, 60],
     ['medkit', 60, 100],
     ['ammo', 90, 130],
+    ['food', 50, 110],
   ];
   const spaced = (x: number, y: number, gap: number): boolean =>
     g.pickups.every((p) => Math.hypot(p.x - x, p.y - y) >= gap);
@@ -566,7 +607,14 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
     if (act.interact) interact(g, world);
     if (!indoors) collectPickups(g);
 
-    if (g.inside >= 0) {
+    // hunger: it never stops, indoors or out. Without food you starve, and nothing heals.
+    g.food = Math.max(0, g.food - GAME.food.drain * dt);
+    if (g.food <= 0) {
+      const starving = GAME.food.starve * dt;
+      g.health -= starving;
+      g.stats.damageTaken += starving;
+      g.sinceHurt = 0;
+    } else if (g.inside >= 0) {
       // safe for now: rest and recover to full health
       g.health = Math.min(GAME.health, g.health + GAME.shelter.heal * dt);
     } else if (g.sinceHurt > GAME.regenDelay && g.health < GAME.regenCap) {
@@ -812,8 +860,9 @@ function stepWeapon(
       g.reloading = w.reload;
       emit(g, { type: 'reload' });
     } else {
+      // nothing left to shoot: the click turns into a swing of whatever you have in hand
       emit(g, { type: 'empty' });
-      g.fireCooldown = 0.4;
+      tryMelee(g, face ?? g.player.heading);
     }
     return;
   }
@@ -866,7 +915,7 @@ function fireShot(g: GameState, aimAngle: number, colliders: Colliders): void {
     if (target >= 0) {
       anyHit = true;
       const killed = damageZombie(h, target, w.damage, p.x, p.y);
-      if (killed) g.stats.kills++;
+      if (killed) registerKill(g, h.x[target], h.y[target]);
       emit(g, { type: 'hit', x: endX, y: endY, kill: killed });
     }
   }
@@ -879,6 +928,50 @@ function fireShot(g: GameState, aimAngle: number, colliders: Colliders): void {
   if (g.ammo === 0 && g.reserve > 0) {
     g.reloading = w.reload;
     emit(g, { type: 'reload' });
+  }
+}
+
+/** Put a pickup down, reusing the room of one already taken when the ground is full. */
+function addPickup(g: GameState, pickup: Pickup): void {
+  if (g.pickups.length < GAME.pickups.max) {
+    g.pickups.push(pickup);
+    return;
+  }
+  const spent = g.pickups.findIndex((p) => p.taken);
+  if (spent >= 0) g.pickups[spent] = pickup;
+}
+
+/** A zombie died by the survivor's hand: count it, and perhaps it was carrying something. */
+function registerKill(g: GameState, x: number, y: number): void {
+  g.stats.kills++;
+  const roll = nextFloat(g.rng);
+  const D = GAME.drops;
+  if (roll < D.ammo) addPickup(g, { x, y, kind: 'ammo', taken: false, amount: D.ammoAmount });
+  else if (roll < D.ammo + D.food) addPickup(g, { x, y, kind: 'food', taken: false });
+  else if (roll < D.ammo + D.food + D.medkit) addPickup(g, { x, y, kind: 'medkit', taken: false });
+}
+
+/** Swing at whatever is in front: a cone, short reach, three to fell a walker. Works with an empty gun. */
+function tryMelee(g: GameState, heading: number): void {
+  if (g.fireCooldown > 0) return;
+  const m = GAME.melee;
+  const { player: p, horde: h } = g;
+  const fx = Math.cos(heading);
+  const fy = Math.sin(heading);
+  g.fireCooldown = m.cooldown;
+  addNoise(g, p.x, p.y, m.noise, GAME.noise.ttl);
+  emit(g, { type: 'swing', x: p.x, y: p.y, heading });
+  for (let i = 0; i < h.used; i++) {
+    if (!isAlive(h, i)) continue;
+    const ox = h.x[i] - p.x;
+    const oy = h.y[i] - p.y;
+    const d = Math.hypot(ox, oy);
+    if (d > m.range || d < 1e-4) continue;
+    if ((ox * fx + oy * fy) / d < m.cone) continue;
+    const killed = damageZombie(h, i, m.damage, p.x, p.y);
+    emit(g, { type: 'hit', x: h.x[i], y: h.y[i], kill: killed });
+    if (killed) registerKill(g, h.x[i], h.y[i]);
+    else shoveZombie(h, i, ox / d, oy / d, m.knock, m.stun);
   }
 }
 
@@ -901,7 +994,7 @@ function tryShove(g: GameState): void {
     if (d > s.range || d < 1e-4) continue;
     if ((ox * fx + oy * fy) / d < s.cone) continue;
     if (damageZombie(h, i, s.damage, p.x, p.y)) {
-      g.stats.kills++;
+      registerKill(g, h.x[i], h.y[i]);
       emit(g, { type: 'hit', x: h.x[i], y: h.y[i], kill: true });
       continue;
     }
@@ -920,10 +1013,13 @@ function collectPickups(g: GameState): void {
     if (pick.kind === 'ammo') {
       // pistol rounds, whichever gun is in hand
       if (reserveOf(g, 'pistol') >= GAME.weapon.reserveCap) continue; // leave it for later
-      addReserve(g, 'pistol', GAME.pickups.ammoAmount);
+      addReserve(g, 'pistol', pick.amount ?? GAME.pickups.ammoAmount);
+    } else if (pick.kind === 'food') {
+      if (g.food > GAME.food.max - 10) continue; // not worth wasting while nearly full
+      g.food = Math.min(GAME.food.max, g.food + (pick.amount ?? GAME.pickups.foodAmount));
     } else {
       if (g.health >= GAME.health) continue;
-      g.health = Math.min(GAME.health, g.health + GAME.pickups.medkitAmount);
+      g.health = Math.min(GAME.health, g.health + (pick.amount ?? GAME.pickups.medkitAmount));
     }
     pick.taken = true;
     emit(g, { type: 'pickup', kind: pick.kind, x: pick.x, y: pick.y });
@@ -1006,6 +1102,7 @@ function interact(g: GameState, world: GameWorld): boolean {
       place: place.id,
       ammo: gotAmmo,
       health: 0,
+      food: 0,
       armory: true,
       shotgun: true,
     });
@@ -1013,22 +1110,27 @@ function interact(g: GameState, world: GameWorld): boolean {
   }
   let ammo = 0;
   let health = 0;
+  let food = 0;
   const roll = nextFloat(g.rng);
   if (roll < GAME.loot.both) {
     ammo = Math.round(GAME.loot.ammo / 2);
-    health = Math.round(GAME.loot.health / 2);
-  } else if (roll < 0.6) ammo = GAME.loot.ammo;
-  else health = GAME.loot.health;
+    food = Math.round(GAME.loot.food / 2);
+  } else if (roll < 0.4) ammo = GAME.loot.ammo;
+  else if (roll < 0.65) health = GAME.loot.health;
+  else food = GAME.loot.food;
   const gotAmmo = addReserve(g, 'pistol', ammo);
   const gotHealth = Math.min(health, GAME.health - g.health);
+  const gotFood = Math.min(food, GAME.food.max - g.food);
   g.health += gotHealth;
-  // with nothing useful to take (full pack, full health) the place is left as it was, for later
-  g.used[place.id] = gotAmmo > 0 || gotHealth > 0;
+  g.food += gotFood;
+  // with nothing useful to take (full pack, health and stomach) the place is left as it was, for later
+  g.used[place.id] = gotAmmo > 0 || gotHealth > 0 || gotFood > 0;
   emit(g, {
     type: 'loot',
     place: place.id,
     ammo: gotAmmo,
     health: Math.round(gotHealth),
+    food: Math.round(gotFood),
     armory: false,
     shotgun: false,
   });

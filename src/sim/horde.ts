@@ -31,9 +31,10 @@ export const ZKind = { WALKER: 0, RUNNER: 1 } as const;
 export const ZOMBIE = {
   radius: 0.34,
   kinds: [
-    // walkers are slower than a walking survivor (3.2 m/s); runners are faster, but slower than a sprint (6.2)
+    // walkers are slower than a walking survivor (3.4 m/s); runners are faster than a walk (they will run
+    // you down if you stroll) but slower than a sprint (7.6), so stamina decides who gets away
     { health: 100, chase: 2.3, damage: 14, windup: 0.5, cooldown: 1.2 },
-    { health: 50, chase: 3.7, damage: 9, windup: 0.32, cooldown: 0.9 },
+    { health: 50, chase: 5.2, damage: 9, windup: 0.32, cooldown: 0.9 },
   ],
   wanderSpeed: 0.8,
   investigateSpeed: 1.5,

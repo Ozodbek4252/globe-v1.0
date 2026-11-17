@@ -123,7 +123,8 @@ so the globe page stays light.
 - **Camera:** it follows the survivor from the side with the clearest view. `Q E` or right-drag turn
   it, the wheel zooms, `H` recentres. `V` switches to a free camera (`W A S D` or drag pan it, `R F`
   tilt, `T` jumps to the TV tower), and `V` again returns to the survivor.
-- **Other keys:** `P` shows a performance panel, `Esc` goes back to the globe.
+- **Other keys:** `P` or `Esc` pauses (a menu offers resume, start again, back to the globe), `F2`
+  shows a performance panel. The game also pauses by itself when the window loses focus.
 - **Time of day:** a slider sets the real sun position over Tashkent (a fixed autumn date). Windows and
   street lamps light up as it gets dark.
 - **Deep links:** `/?hour=17.4&view=x,y,yaw,pitch,distance&player=x,y&camera=free#city` opens at a

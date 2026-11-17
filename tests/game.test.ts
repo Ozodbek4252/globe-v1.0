@@ -94,7 +94,8 @@ describe('a new game', () => {
     expect(g.health).toBe(GAME.health);
     expect(g.ammo).toBe(GAME.weapon.mag);
     expect(g.reserve).toBe(GAME.weapon.reserve);
-    expect(g.pickups).toHaveLength(GAME.pickups.ammo + GAME.pickups.medkit);
+    expect(g.pickups).toHaveLength(GAME.pickups.ammo + GAME.pickups.medkit + GAME.pickups.food);
+    expect(g.food).toBe(GAME.food.max);
     expect(rescueIn(g)).toBe(1000);
   });
 
@@ -587,13 +588,16 @@ describe('places', () => {
     const { g, run, goTo, place, events } = district();
     g.reserve = GAME.weapon.reserveCap;
     g.health = GAME.health;
+    g.food = GAME.food.max;
     goTo('supplies');
     run({ interact: true }, DT);
     expect(g.used[place('supplies').id]).toBe(false);
     const loot = events.find((e) => e.type === 'loot');
-    expect(loot).toMatchObject({ ammo: 0, health: 0 });
-    // hurt now, and it is worth searching after all
+    expect(loot).toMatchObject({ ammo: 0, health: 0, food: 0 });
+    // starving, hurt and short of ammunition: it is worth searching after all, whatever the roll gives
     g.health = 30;
+    g.food = 10;
+    g.reserve = 0;
     run({ interact: true }, DT);
     expect(g.used[place('supplies').id]).toBe(true);
   });
@@ -1032,11 +1036,14 @@ describe('the shotgun', () => {
   });
 
   it('is weak at long range, and useless beyond it', () => {
+    // tough targets, so a blast cannot kill them and the damage can be compared
     const near = armed();
     const a = near.still(3, 0);
+    near.g.horde.health[a] = 10000;
     near.run({ fire: true, aim: [30, 0] }, DT);
     const far = armed();
     const b = far.still(14, 0);
+    far.g.horde.health[b] = 10000;
     far.run({ fire: true, aim: [30, 0] }, DT);
     expect(far.g.horde.health[b]).toBeGreaterThan(near.g.horde.health[a]); // hurt far less than at 3 m
     const out = armed();
@@ -1094,5 +1101,115 @@ describe('the shotgun', () => {
     expect(g.pickups[0].taken).toBe(true);
     expect(g.stash.reserve).toBe(stash + GAME.pickups.ammoAmount); // the pistol's, in the stash
     expect(g.reserve).toBeLessThanOrEqual(GAME.shotgun.reserve); // the shotgun's, untouched
+  });
+});
+
+describe('surviving without a rescue: food, drops and fists', () => {
+  it('gets hungry steadily, and starves without food', () => {
+    const { g, run } = setup();
+    run({}, 10);
+    expect(g.food).toBeCloseTo(GAME.food.max - GAME.food.drain * 10, 1);
+    g.food = 0;
+    g.health = 50;
+    run({}, 5);
+    expect(g.health).toBeLessThan(50 - GAME.food.starve * 4);
+    expect(g.food).toBe(0);
+  });
+
+  it('heals nothing while starving, even in a shelter', () => {
+    const t = district();
+    t.goTo('shelter');
+    t.run({ interact: true }, DT);
+    t.g.food = 0;
+    t.g.health = 60;
+    t.run({}, 5);
+    expect(t.g.health).toBeLessThan(60);
+  });
+
+  it('eats a food pickup, and leaves it when full', () => {
+    const { g, run } = setup();
+    g.food = 20;
+    g.pickups = [{ x: 0.5, y: 0, kind: 'food', taken: false }];
+    run({}, 0.1);
+    expect(g.pickups[0].taken).toBe(true);
+    expect(g.food).toBeCloseTo(20 + GAME.pickups.foodAmount, 0);
+    g.food = GAME.food.max;
+    g.pickups = [{ x: 0.5, y: 0, kind: 'food', taken: false }];
+    run({}, 0.1);
+    expect(g.pickups[0].taken).toBe(false);
+  });
+
+  it('leaves what a zombie was carrying where it fell, sometimes', () => {
+    let dropped = 0;
+    for (let seed = 1; seed <= 40; seed++) {
+      const t = setup({}, { seed });
+      t.g.pickups = [];
+      const z = t.still(4, 0);
+      t.g.horde.health[z] = 1;
+      t.run({ ...EAST, fire: true }, 0.3);
+      expect(t.g.horde.state[z]).toBe(ZState.DEAD);
+      dropped += t.g.pickups.length;
+      for (const p of t.g.pickups) {
+        expect(Math.hypot(p.x - t.g.horde.x[z], p.y - t.g.horde.y[z])).toBeLessThan(0.01);
+      }
+    }
+    // about a quarter of kills drop something: 40 kills is nowhere near none or all
+    expect(dropped).toBeGreaterThan(2);
+    expect(dropped).toBeLessThan(30);
+  });
+
+  it('never has more pickups on the ground than the limit', () => {
+    const { g, run, still } = setup();
+    g.pickups = Array.from({ length: GAME.pickups.max }, (_, i) => ({
+      x: 100 + i,
+      y: 100,
+      kind: 'ammo' as const,
+      taken: i === 3,
+    }));
+    for (let k = 0; k < 30; k++) {
+      const z = still(4, 0);
+      g.horde.health[z] = 1;
+      g.fireCooldown = 0;
+      run({ ...EAST, fire: true }, 0.3);
+    }
+    expect(g.pickups.length).toBeLessThanOrEqual(GAME.pickups.max);
+  });
+
+  it('swings a melee weapon when the gun is dry: three blows fell a walker', () => {
+    const { g, run, still, events } = setup();
+    g.ammo = 0;
+    g.reserve = 0;
+    const z = still(1.4, 0);
+    run({ ...EAST, fire: true }, 0.2);
+    expect(events.some((e) => e.type === 'swing')).toBe(true);
+    expect(g.stats.shots).toBe(0);
+    expect(g.horde.health[z]).toBeCloseTo(100 - GAME.melee.damage, 3);
+    run({ ...EAST, fire: true }, 3);
+    expect(g.horde.state[z]).toBe(ZState.DEAD);
+    expect(g.stats.kills).toBe(1);
+  });
+
+  it('does not reach far, and is slower than a gun', () => {
+    const { g, run, still } = setup();
+    g.ammo = 0;
+    g.reserve = 0;
+    const far = still(4, 0);
+    run({ ...EAST, fire: true }, 0.2);
+    expect(g.horde.health[far]).toBe(100);
+    const swings = (): number => {
+      const t = setup();
+      t.g.ammo = 0;
+      t.g.reserve = 0;
+      t.run({ ...EAST, fire: true }, 4);
+      return t.events.filter((e) => e.type === 'swing').length;
+    };
+    expect(swings()).toBe(Math.ceil(4 / GAME.melee.cooldown)); // five swings in four seconds
+  });
+
+  it('does not swing while a gun still has rounds, or when the gun is only reloading', () => {
+    const { g, run, events } = setup();
+    run({ ...EAST, fire: true }, 0.3);
+    expect(events.some((e) => e.type === 'swing')).toBe(false);
+    expect(g.stats.shots).toBeGreaterThan(0);
   });
 });

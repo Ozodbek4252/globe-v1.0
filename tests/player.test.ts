@@ -143,15 +143,23 @@ describe('sprinting and stamina', () => {
     expect(p.stamina).toBeCloseTo(1 - PLAYER.staminaDrain, 2);
   });
 
-  it('runs out of breath after about five seconds and drops to a walk', () => {
-    const p = run(createPlayer(0, 0), sprint, 5.5);
+  // how long a full tank lasts at a flat-out sprint, from the tuning (about 14 s)
+  const tank = 1 / PLAYER.staminaDrain;
+
+  it('lasts a good while: a real sprint of ten seconds or more', () => {
+    expect(tank).toBeGreaterThan(10);
+    expect(PLAYER.sprintSpeed).toBeGreaterThan(7); // a human sprint, 25 km/h and up
+  });
+
+  it('runs out of breath at the end of that, and drops to a walk', () => {
+    const p = run(createPlayer(0, 0), sprint, tank + 0.5);
     expect(p.exhausted).toBe(true);
     expect(p.sprinting).toBe(false);
     expect(speedOf(p)).toBeCloseTo(PLAYER.walkSpeed, 6);
   });
 
   it('cannot sprint again until rested, then can', () => {
-    let p = run(createPlayer(0, 0), sprint, 5.5);
+    let p = run(createPlayer(0, 0), sprint, tank + 0.5);
     p = run(p, sprint, 0.5); // still holding shift: no sprint, no recovery progress to speak of
     expect(p.exhausted).toBe(true);
     p = run(p, idle, 3); // rest
@@ -164,8 +172,9 @@ describe('sprinting and stamina', () => {
   it('only drains while actually running, and refills after a pause', () => {
     const standing = run(createPlayer(0, 0), { moveX: 0, moveY: 0, sprint: true }, 2);
     expect(standing.stamina).toBe(1);
-    let p = run(createPlayer(0, 0), sprint, 2);
+    let p = run(createPlayer(0, 0), sprint, 6);
     const tired = p.stamina;
+    expect(tired).toBeLessThan(0.7);
     p = run(p, idle, 0.5); // within the pause: no refill yet
     expect(p.stamina).toBe(tired);
     p = run(p, idle, 3);

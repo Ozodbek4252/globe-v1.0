@@ -107,10 +107,17 @@ function onTime(): void {
 function onKey(e: KeyboardEvent): void {
   if (e.key === 'Escape') {
     e.preventDefault();
-    emit('close');
-  } else if (e.key.toLowerCase() === 'p' && !(e.target instanceof HTMLInputElement)) {
+    // Esc opens the pause menu while playing (and closes it); once the game is over it leaves
+    if (scene && player.value?.phase === 'playing') scene.togglePause();
+    else emit('close');
+  } else if (e.key === 'F2') {
+    e.preventDefault();
     showStats.value = !showStats.value;
   }
+}
+
+function setPaused(paused: boolean): void {
+  scene?.setPaused(paused);
 }
 
 onMounted(async () => {
@@ -199,7 +206,22 @@ onBeforeUnmount(() => {
 
     <template v-if="ready">
       <RadarScope :frame="radar" />
-      <GameHud ref="hud" :player="player" @restart="restart" @close="emit('close')" />
+      <GameHud
+        ref="hud"
+        :player="player"
+        @restart="restart"
+        @close="emit('close')"
+        @resume="setPaused(false)"
+      />
+      <button
+        v-if="player?.phase === 'playing'"
+        class="city-btn city-pause"
+        type="button"
+        :aria-label="player.paused ? 'Resume' : 'Pause'"
+        @click="setPaused(!player.paused)"
+      >
+        {{ player.paused ? '▶ Resume' : '⏸ Pause' }}
+      </button>
 
       <button
         class="city-btn city-back"
@@ -251,6 +273,19 @@ onBeforeUnmount(() => {
         </div>
         <div
           v-if="player.camera === 'follow'"
+          class="food"
+          :class="{ low: player.food < 25, empty: player.food <= 0 }"
+          role="progressbar"
+          aria-label="Food"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          :aria-valuenow="Math.round(player.food)"
+        >
+          <i :style="{ width: Math.round(player.food) + '%' }"></i>
+          <span>{{ player.food <= 0 ? 'Starving' : player.food < 25 ? 'Hungry' : 'Food' }}</span>
+        </div>
+        <div
+          v-if="player.camera === 'follow'"
           class="stamina"
           :class="{ tired: player.exhausted, running: player.sprinting }"
           role="progressbar"
@@ -277,13 +312,16 @@ onBeforeUnmount(() => {
             <kbd>Space</kbd> shove &nbsp; <kbd>F</kbd> use a door &nbsp; <kbd>L</kbd> flashlight
           </li>
           <li><kbd>Q</kbd><kbd>E</kbd> or right-drag: turn camera &nbsp; <kbd>Wheel</kbd> zoom</li>
-          <li><kbd>V</kbd> free camera &nbsp; <kbd>H</kbd> recentre &nbsp; <kbd>Esc</kbd> globe</li>
+          <li>
+            <kbd>V</kbd> free camera &nbsp; <kbd>H</kbd> recentre &nbsp; <kbd>P</kbd>
+            <kbd>Esc</kbd> pause
+          </li>
         </template>
         <template v-else>
           <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or drag: move camera</li>
           <li><kbd>Q</kbd><kbd>E</kbd> or right-drag: turn &nbsp; <kbd>R</kbd><kbd>F</kbd> tilt</li>
           <li><kbd>T</kbd> TV tower &nbsp; <kbd>V</kbd> back to survivor</li>
-          <li><kbd>H</kbd> home &nbsp; <kbd>Esc</kbd> globe</li>
+          <li><kbd>H</kbd> home &nbsp; <kbd>P</kbd> <kbd>Esc</kbd> pause</li>
         </template>
       </ul>
 
@@ -388,6 +426,12 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 16px;
   left: 16px;
+}
+.city-pause {
+  position: absolute;
+  top: 16px;
+  left: 104px;
+  z-index: 2;
 }
 
 .city-title {
@@ -521,6 +565,37 @@ onBeforeUnmount(() => {
   display: grid;
   place-items: center;
   font: 600 12px var(--f-mono);
+  color: var(--ink);
+}
+.food {
+  position: relative;
+  width: min(260px, 60vw);
+  height: 14px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  overflow: hidden;
+  backdrop-filter: blur(6px);
+}
+.food i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, #3f78c4, #6ab8ff);
+  transition: width 0.3s linear;
+}
+.food.low i {
+  background: #c9843a;
+}
+.food.empty i {
+  background: #c9574d;
+}
+.food span {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font: 500 10px var(--f-mono);
+  letter-spacing: 0.08em;
   color: var(--ink);
 }
 .stamina {

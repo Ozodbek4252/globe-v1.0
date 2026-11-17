@@ -144,6 +144,12 @@ export interface PlayerStatus {
   phase: GameStatus;
   /** 0 to 100. */
   health: number;
+  /** 0 to 100: how well fed. At zero the survivor starves. */
+  food: number;
+  /** The gun in hand is dry, so a click swings the melee weapon instead. */
+  meleeReady: boolean;
+  /** The game is paused: nothing moves, hunger and the clock stand still. */
+  paused: boolean;
   /** The gun in hand, and whether the shotgun has been found. */
   weapon: WeaponName;
   hasShotgun: boolean;
@@ -208,12 +214,13 @@ export interface RadarFrame {
 export type GameNotice =
   | { type: 'wave'; number: number; size: number; compass: string; angle: number }
   | { type: 'hurt'; amount: number; angle: number }
-  | { type: 'pickup'; kind: 'ammo' | 'medkit' }
+  | { type: 'pickup'; kind: 'ammo' | 'medkit' | 'food' }
   /** A shop, clinic or armory was searched (all zero when there was nothing you could use). */
   | {
       type: 'loot';
       ammo: number;
       health: number;
+      food: number;
       armory: boolean;
       shotgun: boolean;
       place: string;
@@ -350,6 +357,9 @@ export interface CityScene {
   onRadar(listener: (frame: RadarFrame | null) => void): Unsubscribe;
   /** Start again from the beginning with a new random game. */
   restart(): void;
+  /** Stop or resume the game. The picture keeps drawing; nothing in the game moves. */
+  setPaused(paused: boolean): void;
+  togglePause(): void;
   debug?: CityDebug;
   destroy(): void;
 }
@@ -661,7 +671,7 @@ export async function createCityScene(
   own(effects);
   effects.setReducedMotion(reducedMotion);
   scene.add(effects.object);
-  let pickupMarkers: PickupMarkers = createPickupMarkers(game.pickups);
+  const pickupMarkers: PickupMarkers = createPickupMarkers(GAME.pickups.max);
   scene.add(pickupMarkers.object);
   const placeMarkers = createPlaceMarkers(
     gameWorld.places,
@@ -826,6 +836,7 @@ export async function createCityScene(
   let interactQueued = false;
   let weaponQueued: 0 | 1 | 2 = 0;
   let triggerHeld = false;
+  let paused = false;
   let aimScreen: { x: number; y: number } | null = null;
   const onKeyDown = (e: KeyboardEvent): void => {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -834,6 +845,7 @@ export async function createCityScene(
     // Enter plays again; on a focused button it already means "press this", so leave it alone there
     if (k === 'enter' && game.status !== 'playing' && !(e.target instanceof HTMLButtonElement))
       restart();
+    else if (k === 'p') paused = !paused && game.status === 'playing';
     else if (k === 'r' && cameraMode === 'follow') {
       if (!e.repeat) reloadQueued = true;
     } else if (k === ' ' && cameraMode === 'follow') {
@@ -860,6 +872,8 @@ export async function createCityScene(
   const onBlur = (): void => {
     keys.clear();
     triggerHeld = false;
+    // hunger and zombies do not wait: if you look away, the game does
+    if (game.status === 'playing') paused = true;
   };
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
@@ -975,6 +989,7 @@ export async function createCityScene(
           type: 'loot',
           ammo: e.ammo,
           health: e.health,
+          food: e.food,
           armory: e.armory,
           shotgun: e.shotgun,
           place: gameWorld.places[e.place].name,
@@ -1079,14 +1094,11 @@ export async function createCityScene(
     game = newGame();
     player = previous = game.player;
     gamePhase = 'playing';
+    paused = false;
     downAmount = 0;
     survivor.setDown(0);
     helicopter.hide();
     effects.clear();
-    scene.remove(pickupMarkers.object);
-    pickupMarkers.dispose();
-    pickupMarkers = createPickupMarkers(game.pickups);
-    scene.add(pickupMarkers.object);
     reloadQueued = shoveQueued = interactQueued = false;
     weaponQueued = 0;
     simClock = 0;
@@ -1143,7 +1155,8 @@ export async function createCityScene(
       interact: interactQueued,
       weapon: weaponQueued,
     };
-    simClock = debugFrozen ? 0 : simClock + dt;
+    simClock = debugFrozen || paused ? 0 : simClock + dt;
+    const simDt = paused ? 0 : dt; // animations that follow the game stand still too
     let steps = 0;
     while (simClock >= SIM_STEP && steps < 6) {
       previous = player;
@@ -1219,7 +1232,7 @@ export async function createCityScene(
     );
 
     // the horde, the supplies, the shots and the rescue
-    zombies.update(game.horde, dt, current.x, -current.z, current.distance);
+    zombies.update(game.horde, simDt, current.x, -current.z, current.distance);
     people.update(game.civilians, now / 1000, current.distance);
     pickupMarkers.sync(game.pickups, now / 1000, darkness);
     // a place that is used up, or a shelter whose door has gone, fades
@@ -1233,7 +1246,7 @@ export async function createCityScene(
       clamp(current.distance / 36, 1, 5),
       aimMode,
     );
-    effects.update(dt);
+    effects.update(simDt);
     if (game.inbound && gamePhase !== 'lost') {
       const along = 1 - rescueIn(game) / GAME.inbound;
       helicopter.update(
@@ -1376,6 +1389,9 @@ export async function createCityScene(
         camera: cameraMode,
         phase: game.status,
         health: game.health,
+        food: game.food,
+        meleeReady: game.ammo <= 0 && game.reserve <= 0,
+        paused,
         weapon: game.weapon,
         hasShotgun: game.hasShotgun,
         ammo: game.ammo,
@@ -1493,6 +1509,12 @@ export async function createCityScene(
     onGame: notices.on,
     onRadar: radarFrames.on,
     restart,
+    setPaused(p) {
+      paused = p && game.status === 'playing';
+    },
+    togglePause() {
+      paused = !paused && game.status === 'playing';
+    },
     debug: options.debug
       ? {
           spawn(count, distance, hunting) {

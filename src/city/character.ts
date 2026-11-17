@@ -158,7 +158,7 @@ export function createSurvivor(): Survivor {
       // city (x, y) is Three.js (x, -y); the model faces +Z, so turn it by heading + 90 degrees
       parent.position.set(x, 0, -y);
       root.rotation.y = heading + Math.PI / 2;
-      const pace = Math.min(1, speed / 3.2); // 0 standing, 1 walking, above that running
+      const pace = Math.min(1, speed / 3.4); // 0 standing, 1 walking, above that running
       const phase = (travelled / STRIDE) * Math.PI * 2;
       const swing = 0.75 * Math.min(1.35, pace) * (sprinting ? 1.25 : 1) * (1 - down);
       legL.rotation.x = Math.sin(phase) * swing;

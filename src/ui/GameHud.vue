@@ -3,7 +3,16 @@ import { computed, nextTick, onBeforeUnmount, ref, useTemplateRef, watch } from 
 import type { GameNotice, PlayerStatus } from '../city/createCity';
 
 const props = defineProps<{ player: PlayerStatus | null }>();
-const emit = defineEmits<{ restart: []; close: [] }>();
+const emit = defineEmits<{ restart: []; close: []; resume: [] }>();
+const resumeButton = useTemplateRef<HTMLButtonElement>('resumeButton');
+
+// when the pause menu opens, put the keyboard on "Resume"
+watch(
+  () => props.player?.paused,
+  (paused) => {
+    if (paused) void nextTick(() => resumeButton.value?.focus());
+  },
+);
 
 type Over = Extract<GameNotice, { type: 'over' }>;
 
@@ -69,11 +78,18 @@ function push(n: GameNotice): void {
       later(() => banner.value?.id === id && (banner.value = null), 7000);
       break;
     case 'pickup':
-      toast.value = { id, text: n.kind === 'ammo' ? '+15 rounds' : '+40 health' };
+      toast.value = {
+        id,
+        text: n.kind === 'ammo' ? '+rounds' : n.kind === 'food' ? '+food' : '+40 health',
+      };
       later(() => toast.value?.id === id && (toast.value = null), 1600);
       break;
     case 'loot': {
-      const got = [n.ammo > 0 ? `+${n.ammo} rounds` : '', n.health > 0 ? `+${n.health} health` : '']
+      const got = [
+        n.ammo > 0 ? `+${n.ammo} rounds` : '',
+        n.health > 0 ? `+${n.health} health` : '',
+        n.food > 0 ? `+${n.food} food` : '',
+      ]
         .filter(Boolean)
         .join(' · ');
       const text = n.shotgun
@@ -289,8 +305,8 @@ const accuracy = computed(() =>
           <i :style="{ width: Math.round(player.reloading * 100) + '%' }"></i>
           <span>Reloading</span>
         </span>
-        <span v-else-if="player.ammo === 0 && player.reserve === 0" class="hud-empty"
-          >Out of ammo</span
+        <span v-else-if="player.meleeReady" class="hud-empty"
+          >Out of ammo · click to swing<br /><small>kill zombies for drops</small></span
         >
         <span class="hud-shove" :class="{ ready: player.shove >= 1 }">
           <i :style="{ width: Math.round(Math.min(1, player.shove) * 100) + '%' }"></i>
@@ -298,6 +314,26 @@ const accuracy = computed(() =>
         </span>
       </div>
     </template>
+
+    <div
+      v-if="player?.paused && player.phase === 'playing'"
+      class="hud-over"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Paused"
+    >
+      <div class="hud-card paused">
+        <h2>Paused</h2>
+        <p>Nothing moves while you are here: not the zombies, not hunger.</p>
+        <div class="hud-actions">
+          <button ref="resumeButton" class="city-btn primary" type="button" @click="emit('resume')">
+            Resume <kbd>Esc</kbd>
+          </button>
+          <button class="city-btn" type="button" @click="emit('restart')">Start again</button>
+          <button class="city-btn" type="button" @click="emit('close')">Back to the globe</button>
+        </div>
+      </div>
+    </div>
 
     <div
       v-if="over"
@@ -709,6 +745,10 @@ const accuracy = computed(() =>
   background: rgba(14, 8, 10, 0.92);
   text-align: center;
   animation: hud-in-card 0.4s ease-out;
+}
+.hud-card.paused {
+  border-color: rgba(120, 150, 210, 0.6);
+  background: rgba(8, 12, 22, 0.92);
 }
 .hud-card.won {
   border-color: rgba(255, 210, 122, 0.65);

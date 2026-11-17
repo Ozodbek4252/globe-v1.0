@@ -7,8 +7,9 @@ import { moveCircle, type Colliders } from './colliders';
 export const PLAYER = {
   /** Body radius used for collisions. */
   radius: 0.38,
-  walkSpeed: 3.2,
-  sprintSpeed: 6.2,
+  /** A brisk walk, and a real sprint (7.6 m/s is 27 km/h: a fit person flat out; walkers cannot touch it). */
+  walkSpeed: 3.4,
+  sprintSpeed: 7.6,
   /** How quickly speed builds when you press a key, and bleeds off when you let go (m/s²). */
   accel: 26,
   decel: 34,
@@ -16,9 +17,9 @@ export const PLAYER = {
   turnRate: 14,
   /** Turning to face the aim point is faster, so the gun follows the mouse closely. */
   aimTurnRate: 24,
-  /** Stamina is 0 to 1. Sprinting uses it, resting restores it after a short pause. */
-  staminaDrain: 0.2,
-  staminaRegen: 0.28,
+  /** Stamina is 0 to 1. Sprinting uses it (about 14 s flat out), resting restores it (about 5 s) after a short pause. */
+  staminaDrain: 0.07,
+  staminaRegen: 0.2,
   regenDelay: 0.9,
   /** After running dry you cannot sprint again until stamina climbs back to this. */
   exhaustedUntil: 0.3,
