@@ -86,6 +86,45 @@ function draw(): void {
   }
   g.globalAlpha = 1;
 
+  // people: green, solid when with you and hollow while they are still hiding
+  for (let i = 0; i < f.people.length; i += 3) {
+    const x = f.people[i] * k;
+    const y = -f.people[i + 1] * k;
+    const d = Math.hypot(x, y);
+    const edge = R - 6;
+    const px = d > edge ? (x / d) * edge : x;
+    const py = d > edge ? (y / d) * edge : y;
+    g.beginPath();
+    g.arc(c + px, c + py, 3.2, 0, Math.PI * 2);
+    if (f.people[i + 2] === 1) {
+      g.fillStyle = '#7dff8f';
+      g.fill();
+    } else {
+      g.strokeStyle = d > edge ? 'rgba(125, 255, 143, 0.55)' : '#7dff8f';
+      g.lineWidth = 1.6;
+      g.stroke();
+    }
+  }
+
+  // the helicopter's landing place, once it has been heard
+  if (f.landing) {
+    const x = f.landing.x * k;
+    const y = -f.landing.y * k;
+    const d = Math.hypot(x, y);
+    const edge = R - 9;
+    const px = c + (d > edge ? (x / d) * edge : x);
+    const py = c + (d > edge ? (y / d) * edge : y);
+    g.fillStyle = '#ffd27a';
+    g.beginPath();
+    g.arc(px, py, 7, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = '#2a1c05';
+    g.font = '700 9px sans-serif';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText('H', px, py + 0.5);
+  }
+
   // zombies: red dots, brighter and larger when they are on your trail
   for (let i = 0; i < f.zombies.length; i += 3) {
     const x = f.zombies[i] * k;

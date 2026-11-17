@@ -53,6 +53,7 @@ let stopRadar: (() => void) | null = null;
  *   &rescue=60                        seconds until the helicopter lands (default 300)
  *   &zombies=0                        groups of zombies in the streets at the start (default 70)
  *   &waves=0                          switch the waves off
+ *   &people=0                         survivors hiding around the map (default 10)
  */
 function linkOptions(): {
   hour?: number;
@@ -85,6 +86,8 @@ function linkOptions(): {
   const zombies = number('zombies');
   if (zombies !== undefined && zombies >= 0) game.zombies = Math.min(300, Math.floor(zombies));
   if (q.get('waves') === '0') game.waves = false;
+  const people = number('people');
+  if (people !== undefined && people >= 0) game.people = Math.min(30, Math.floor(people));
   out.game = game;
   if (q.get('debug') === '1') out.debug = true;
   return out;

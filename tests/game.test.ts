@@ -4,6 +4,7 @@ import {
   createGame,
   createGameWorld,
   drainEvents,
+  countFollowing,
   GAME,
   interactionAt,
   NO_INPUT,
@@ -14,6 +15,7 @@ import {
   type GameOptions,
 } from '../src/sim/game';
 import { hordeChecksum, sendHunting, spawnZombie, ZKind, ZState } from '../src/sim/horde';
+import { CIVILIAN, CState, countIn } from '../src/sim/civilians';
 import { PLACES, type PlaceBuilding } from '../src/sim/places';
 
 const DT = 1 / 60;
@@ -52,6 +54,7 @@ function setup(
     startX: 0,
     startY: 0,
     clumps: 0,
+    civilians: 0,
     waves: false,
     rescueAt: 1000,
     ...options,
@@ -571,6 +574,7 @@ describe('places', () => {
     expect(g.reserve + g.health).toBeGreaterThan(40); // took something
     expect(g.used[place('supplies').id]).toBe(true);
     expect(interactionAt(g, district().world)).toBeNull(); // (a different world: just checks no throw)
+    g.sinceHurt = 0; // no regeneration to muddy the comparison, whatever the roll gave
     const before = [g.reserve, g.health];
     run({ interact: true }, DT);
     expect([g.reserve, g.health]).toEqual(before);
@@ -792,5 +796,170 @@ describe('shelters', () => {
     t.world.places.forEach((p) => {
       expect(t.g.doors[p.id]).toBe(p.kind === 'shelter' ? GAME.shelter.door : 0);
     });
+  });
+});
+
+describe('survivors', () => {
+  /** A game with a few people to save, placed exactly where the test wants them. */
+  const withPeople = (n: number, options: Partial<GameOptions> = {}) => {
+    const t = district({ civilians: n, ...options });
+    const put = (i: number, x: number, y: number, state: number = CState.HIDING): void => {
+      t.g.civilians.x[i] = x;
+      t.g.civilians.y[i] = y;
+      t.g.civilians.state[i] = state;
+      t.g.civilians.health[i] = CIVILIAN.health;
+    };
+    return { ...t, put };
+  };
+
+  it('start hiding, away from the survivor, and the same way for the same seed', () => {
+    const a = district({ civilians: 5, seed: 9 });
+    const b = district({ civilians: 5, seed: 9 });
+    expect(Array.from(a.g.civilians.x)).toEqual(Array.from(b.g.civilians.x));
+    expect(countIn(a.g.civilians, CState.HIDING)).toBeGreaterThan(0);
+    for (let i = 0; i < 5; i++) {
+      if (a.g.civilians.state[i] === CState.HIDING) {
+        expect(Math.hypot(a.g.civilians.x[i], a.g.civilians.y[i])).toBeGreaterThan(55);
+      }
+    }
+  });
+
+  it('join you when you come near, and are counted', () => {
+    const { g, put, run, events, count } = withPeople(2);
+    put(0, 3, 0);
+    put(1, 40, 0);
+    run({}, 0.3);
+    expect(g.civilians.state[0]).toBe(CState.FOLLOWING);
+    expect(g.civilians.state[1]).toBe(CState.HIDING);
+    expect(g.stats.recruited).toBe(1);
+    expect(count('recruit')).toBe(1);
+    expect(events.find((e) => e.type === 'recruit')).toMatchObject({ following: 1 });
+    expect(countFollowing(g)).toBe(1);
+  });
+
+  it('are found and killed by zombies that wander past, who strike them and not the survivor', () => {
+    const { g, put, run, count } = withPeople(1);
+    g.player = { ...g.player, x: -60, y: 0 }; // the survivor is far off and out of mind
+    put(0, 20, 0); // someone hiding
+    const z = spawnZombie(g.horde, 20, 7, ZKind.WALKER, ZState.WANDER);
+    g.horde.timer[z] = 1000;
+    g.horde.heading[z] = -Math.PI / 2; // facing them
+    run({}, 12);
+    expect(g.civilians.state[0]).toBe(CState.DEAD);
+    expect(g.stats.lost).toBe(1);
+    expect(count('civilianDown')).toBe(1);
+    expect(g.stats.damageTaken).toBe(0);
+  });
+
+  it('are left alone by a zombie that cannot see or smell them', () => {
+    const { g, put, run } = withPeople(1);
+    g.player = { ...g.player, x: -60, y: 0 };
+    put(0, 20, 0);
+    const z = spawnZombie(g.horde, 20, 40, ZKind.WALKER, ZState.WANDER); // 40 m off
+    g.horde.timer[z] = 1000;
+    g.horde.heading[z] = -Math.PI / 2;
+    run({}, 8);
+    expect(g.civilians.state[0]).toBe(CState.HIDING);
+    expect(g.stats.lost).toBe(0);
+  });
+
+  it('go into a shelter with you if they are close, and stay behind if they are not', () => {
+    const { g, put, run, goTo, place, count, events } = withPeople(2);
+    goTo('shelter');
+    const s = place('shelter');
+    put(0, s.x + 3, s.y, CState.FOLLOWING);
+    put(1, s.x + 60, s.y, CState.FOLLOWING);
+    run({ interact: true }, DT);
+    expect(g.civilians.state[0]).toBe(CState.SHELTERED);
+    expect(g.civilians.shelter[0]).toBe(s.id);
+    expect(g.civilians.state[1]).toBe(CState.FOLLOWING);
+    expect(count('sheltered')).toBe(1);
+    expect(events.find((e) => e.type === 'sheltered')).toMatchObject({ count: 1, place: s.id });
+  });
+
+  it('are safe behind a door that nothing touches, even when you walk away', () => {
+    const { g, put, run, goTo, place } = withPeople(1);
+    goTo('shelter');
+    const s = place('shelter');
+    put(0, s.x + 2, s.y, CState.FOLLOWING);
+    run({ interact: true }, DT); // in
+    run({ interact: true }, DT); // out again, leaving them
+    run({ moveX: -1 }, 20);
+    expect(g.civilians.state[0]).toBe(CState.SHELTERED);
+    expect(g.doors[s.id]).toBe(GAME.shelter.door);
+  });
+
+  it('draw zombies to the door they hide behind, and are lost if it gives way', () => {
+    const { g, put, run, goTo, place, events, count } = withPeople(2);
+    goTo('shelter');
+    const s = place('shelter');
+    put(0, s.x + 2, s.y, CState.FOLLOWING);
+    put(1, s.x + 3, s.y + 1, CState.FOLLOWING);
+    run({ interact: true }, DT);
+    run({ interact: true }, DT); // the survivor comes out, leaving the two inside
+    g.player = { ...g.player, x: s.x - 80, y: s.y }; // and goes far off
+    g.doors[s.id] = 12;
+    const z = spawnZombie(g.horde, s.x + s.nx * 7, s.y + s.ny * 7, ZKind.WALKER, ZState.WANDER);
+    g.horde.timer[z] = 1000;
+    g.horde.heading[z] = Math.atan2(-s.ny, -s.nx);
+    run({}, 15);
+    expect(g.breached[s.id]).toBe(true);
+    expect(events.find((e) => e.type === 'breach')).toMatchObject({ lost: 2 });
+    expect(count('breach')).toBe(1);
+    expect(g.civilians.state[0]).toBe(CState.DEAD);
+    expect(g.civilians.state[1]).toBe(CState.DEAD);
+    expect(g.stats.lost).toBe(2);
+  });
+
+  it('are saved at the end: the sheltered ones, and the followers near the helicopter', () => {
+    const { g, put, run, goTo, place, events } = withPeople(4, { rescueAt: 30 });
+    goTo('shelter');
+    const s = place('shelter');
+    put(0, s.x + 2, s.y, CState.FOLLOWING);
+    run({ interact: true }, DT);
+    run({ interact: true }, DT); // out again; person 0 stays inside
+    expect(g.civilians.state[0]).toBe(CState.SHELTERED);
+    run({}, 17); // the helicopter is heard at 16 s: it picks somewhere to land
+    expect(g.landing).not.toBeNull();
+    const [lx, ly] = g.landing ?? [0, 0];
+    put(1, lx + 5, ly, CState.FOLLOWING); // near the landing
+    put(2, lx + 90, ly, CState.FOLLOWING); // left behind
+    put(3, lx + 300, ly + 300, CState.HIDING); // never found
+    run({}, 15);
+    expect(g.status).toBe('won');
+    expect(g.civilians.state[0]).toBe(CState.SAVED);
+    expect(g.civilians.state[1]).toBe(CState.SAVED);
+    expect(g.civilians.state[2]).not.toBe(CState.SAVED);
+    expect(g.civilians.state[3]).not.toBe(CState.SAVED);
+    expect(g.stats.saved).toBe(2);
+    expect(events.find((e) => e.type === 'saved')).toMatchObject({ count: 2 });
+  });
+
+  it('are told where the helicopter lands, which is open ground near the survivor', () => {
+    const { g, run, events, colliders } = withPeople(0, { rescueAt: 20 });
+    run({}, 7);
+    const rescue = events.find((e) => e.type === 'rescue');
+    expect(rescue).toBeDefined();
+    if (rescue?.type !== 'rescue') return;
+    expect(g.landing).toEqual([rescue.x, rescue.y]);
+    expect(insideBuilding(colliders, rescue.x, rescue.y)).toBe(false);
+    expect(Math.hypot(rescue.x - g.player.x, rescue.y - g.player.y)).toBeLessThan(40);
+  });
+
+  it('play out the same way every time', () => {
+    const play = (): string => {
+      const t = district({ civilians: 6, seed: 4, clumps: 10, waves: true });
+      for (let k = 0; k < 30; k++) {
+        t.run({ moveX: Math.cos(k), moveY: Math.sin(k), aim: [10, 10], fire: k % 3 === 0 }, 0.5);
+      }
+      const c = t.g.civilians;
+      return [
+        hordeChecksum(t.g.horde),
+        ...Array.from(c.x),
+        ...Array.from(c.state),
+        t.g.stats.lost,
+      ].join('|');
+    };
+    expect(play()).toBe(play());
   });
 });

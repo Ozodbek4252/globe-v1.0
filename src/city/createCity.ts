@@ -47,6 +47,7 @@ import {
 } from '../sim/game';
 import { sendHunting, spawnZombie, ZKind, ZState } from '../sim/horde';
 import { speedOf, type PlayerState } from '../sim/player';
+import { CState, countIn } from '../sim/civilians';
 import type { PlaceKind } from '../sim/places';
 import { compassName, screenAngle, screenOffset } from './bearings';
 import { createSurvivor } from './character';
@@ -54,6 +55,7 @@ import { createCutaway, type Cutaway } from './cutaway';
 import { createEffects, type AimMode } from './effects';
 import { openestYaw } from './followYaw';
 import { createHelicopter } from './helicopter';
+import { createPeopleRenderer } from './people';
 import { createPickupMarkers, type PickupMarkers } from './pickups';
 import { createPlaceMarkers } from './placeMarkers';
 import { createZombieRenderer } from './zombies';
@@ -168,6 +170,15 @@ export interface PlayerStatus {
   objective: { text: string; distance: number; angle: number; compass: string } | null;
   /** Which shelter the survivor is hiding in, and how much of its door is left (0 to 1); null outdoors. */
   inside: { name: string; door: number } | null;
+  /** The people to save: with you now, safe behind a door, still hiding, lost, saved, and all of them. */
+  survivors: {
+    following: number;
+    sheltered: number;
+    hiding: number;
+    lost: number;
+    saved: number;
+    total: number;
+  };
 }
 
 /** The radar's view of the world, centred on the survivor with "up" ahead of the camera. */
@@ -177,6 +188,10 @@ export interface RadarFrame {
   /** Zombies: x (right), y (up) in metres, then 1 if hunting or striking, else 0: flat triples. */
   zombies: Float32Array;
   places: { kind: PlaceKind; x: number; y: number; used: boolean }[];
+  /** People: x, y, then 1 if with the survivor, 0 if still hiding: flat triples. */
+  people: Float32Array;
+  /** Where the helicopter will land, once it has been heard. */
+  landing: { x: number; y: number } | null;
   /** Where north is on the scope, and which way the survivor faces: radians clockwise from up. */
   north: number;
   heading: number;
@@ -193,7 +208,10 @@ export type GameNotice =
   | { type: 'loot'; ammo: number; health: number; armory: boolean; place: string }
   | { type: 'radar'; place: string }
   | { type: 'enter'; place: string }
-  | { type: 'breach'; place: string }
+  | { type: 'breach'; place: string; lost: number }
+  | { type: 'recruit'; following: number }
+  | { type: 'sheltered'; count: number; place: string }
+  | { type: 'civilianDown' }
   | { type: 'rescue'; seconds: number }
   /** A new game has begun: forget everything announced. */
   | { type: 'restart' }
@@ -206,12 +224,22 @@ export type GameNotice =
       hits: number;
       damageTaken: number;
       waves: number;
+      /** People saved, lost, and in all. */
+      saved: number;
+      lost: number;
+      total: number;
     };
 
 /** Levers for staging scenes (screenshots, tests). Only present when the scene is made with `debug: true`. */
 export interface CityDebug {
   /** Put up to `count` zombies around the survivor, `distance` metres out. Returns how many were placed. */
   spawn(count: number, distance: number, hunting: boolean): number;
+  /** Bring up to `count` survivors to the survivor's side as followers. Returns how many came. */
+  callPeople(count: number): number;
+  /** Where everyone is, and what they are doing (a CState number). */
+  people(): { x: number; y: number; state: number }[];
+  /** Put the survivor at this spot (city metres). */
+  teleport(x: number, y: number): void;
   /** Aim at the nearest zombie by itself instead of at the mouse. */
   autoAim(on: boolean): void;
   /** Take health off the survivor. */
@@ -246,6 +274,12 @@ export interface CityDebug {
     /** The place id of the shelter the survivor is in (-1 outdoors), and what is left of its door. */
     inside: number;
     door: number;
+    /** Survivors with you, behind a door, still hiding, lost and saved. */
+    following: number;
+    sheltered: number;
+    hiding: number;
+    lost: number;
+    saved: number;
   };
 }
 
@@ -258,6 +292,8 @@ export interface GameSetup {
   zombies?: number;
   /** False to switch the waves off. */
   waves?: boolean;
+  /** How many survivors are hiding around the map (0 for none). */
+  people?: number;
 }
 
 export interface CityOptions {
@@ -592,6 +628,7 @@ export async function createCityScene(
       rescueAt: setup.rescueAt,
       clumps: setup.zombies,
       waves: setup.waves,
+      civilians: setup.people,
     });
   let game = newGame();
   let player: PlayerState = game.player;
@@ -603,6 +640,9 @@ export async function createCityScene(
   const zombies = createZombieRenderer(game.horde.capacity);
   own(zombies);
   scene.add(zombies.object);
+  const people = createPeopleRenderer(Math.max(1, game.civilians.count));
+  own(people);
+  scene.add(people.object);
   const effects = createEffects();
   own(effects);
   effects.setReducedMotion(reducedMotion);
@@ -929,7 +969,17 @@ export async function createCityScene(
         notices.emit({ type: 'enter', place: gameWorld.places[e.place].name });
         break;
       case 'breach':
-        notices.emit({ type: 'breach', place: gameWorld.places[e.place].name });
+        notices.emit({ type: 'breach', place: gameWorld.places[e.place].name, lost: e.lost });
+        break;
+      case 'recruit':
+        notices.emit({ type: 'recruit', following: e.following });
+        break;
+      case 'sheltered':
+        notices.emit({ type: 'sheltered', count: e.count, place: gameWorld.places[e.place].name });
+        break;
+      case 'civilianDown':
+        effects.hit(e.x, e.y, true); // blood on the ground where they fell
+        notices.emit({ type: 'civilianDown' });
         break;
       case 'wave':
         notices.emit({
@@ -942,14 +992,7 @@ export async function createCityScene(
         break;
       case 'rescue': {
         helicopterAngle = e.angle;
-        // it lands on open ground a little ahead of the survivor (up the screen), where the camera sees it
-        const axes = groundAxes(current.yaw);
-        helicopterLanding = findSpawn(
-          colliders,
-          [player.x + axes.forward[0] * 11, player.y - axes.forward[1] * 11],
-          35,
-          7,
-        );
+        helicopterLanding = [e.x, e.y]; // the game says where it will land, and who is saved is decided there
         notices.emit({ type: 'rescue', seconds: e.seconds });
         break;
       }
@@ -964,6 +1007,9 @@ export async function createCityScene(
           hits: game.stats.hits,
           damageTaken: Math.round(game.stats.damageTaken),
           waves: game.wave,
+          saved: game.stats.saved,
+          lost: game.stats.lost,
+          total: game.civilians.placed,
         });
         break;
       default:
@@ -1147,6 +1193,7 @@ export async function createCityScene(
 
     // the horde, the supplies, the shots and the rescue
     zombies.update(game.horde, dt, current.x, -current.z, current.distance);
+    people.update(game.civilians, now / 1000, current.distance);
     pickupMarkers.sync(game.pickups, now / 1000, darkness);
     // a place that is used up, or a shelter whose door has gone, fades
     for (let i = 0; i < markerSpent.length; i++) markerSpent[i] = game.used[i] || game.breached[i];
@@ -1185,19 +1232,51 @@ export async function createCityScene(
         if (dx * dx + dy * dy < 1600) near++;
       }
 
-      // what could be done at the door here, and the next goal
+      // what could be done at the door here
       const here = interactionAt(game, gameWorld);
+
+      // the people to save, and who is nearest among those still hiding
+      const cv = game.civilians;
+      let following = 0;
+      let sheltered = 0;
+      let hiding = 0;
+      let nearestHiding = -1;
+      let nearestDistance = Infinity;
+      for (let i = 0; i < cv.count; i++) {
+        const s = cv.state[i];
+        if (s === CState.FOLLOWING) following++;
+        else if (s === CState.SHELTERED) sheltered++;
+        else if (s === CState.HIDING) {
+          hiding++;
+          const d = Math.hypot(cv.x[i] - player.x, cv.y[i] - player.y);
+          if (d < nearestDistance) {
+            nearestDistance = d;
+            nearestHiding = i;
+          }
+        }
+      }
+
+      // the next goal: reach the helicopter, or power up the radar, or find someone
+      const pointAt = (text: string, x: number, y: number): PlayerStatus['objective'] => ({
+        text,
+        distance: Math.hypot(x - player.x, y - player.y),
+        angle: screenAngle(current.yaw, x - player.x, y - player.y),
+        compass: compassName(Math.atan2(y - player.y, x - player.x)),
+      });
       const radarPlace = gameWorld.places.find((p) => p.kind === 'radar');
       let objective: PlayerStatus['objective'] = null;
-      if (radarPlace && !game.radarOn && gamePhase === 'playing') {
-        const dx = radarPlace.x - player.x;
-        const dy = radarPlace.y - player.y;
-        objective = {
-          text: 'Power up the radar',
-          distance: Math.hypot(dx, dy),
-          angle: screenAngle(current.yaw, dx, dy),
-          compass: compassName(Math.atan2(dy, dx)),
-        };
+      if (gamePhase === 'playing') {
+        if (game.inbound && game.landing) {
+          objective = pointAt(
+            following > 0 ? 'Bring them to the helicopter' : 'Reach the helicopter',
+            game.landing[0],
+            game.landing[1],
+          );
+        } else if (radarPlace && !game.radarOn) {
+          objective = pointAt('Power up the radar', radarPlace.x, radarPlace.y);
+        } else if (nearestHiding >= 0) {
+          objective = pointAt('Find survivors', cv.x[nearestHiding], cv.y[nearestHiding]);
+        }
       }
 
       // the radar scope: everything within range, turned so that "up" is ahead of the camera
@@ -1213,6 +1292,22 @@ export async function createCityScene(
           const [rx, ry] = screenOffset(current.yaw, dx, dy);
           found.push(rx, ry, s === ZState.WANDER ? 0 : 1);
         }
+        const folk: number[] = [];
+        for (let i = 0; i < cv.count; i++) {
+          const s = cv.state[i];
+          if (s !== CState.HIDING && s !== CState.FOLLOWING) continue;
+          const [rx, ry] = screenOffset(current.yaw, cv.x[i] - player.x, cv.y[i] - player.y);
+          folk.push(rx, ry, s === CState.FOLLOWING ? 1 : 0);
+        }
+        let landing: RadarFrame['landing'] = null;
+        if (game.landing) {
+          const [rx, ry] = screenOffset(
+            current.yaw,
+            game.landing[0] - player.x,
+            game.landing[1] - player.y,
+          );
+          landing = { x: rx, y: ry };
+        }
         radarFrames.emit({
           range,
           zombies: Float32Array.from(found),
@@ -1220,6 +1315,8 @@ export async function createCityScene(
             const [rx, ry] = screenOffset(current.yaw, p.x - player.x, p.y - player.y);
             return { kind: p.kind, x: rx, y: ry, used: game.used[p.id] };
           }),
+          people: Float32Array.from(folk),
+          landing,
           north: screenAngle(current.yaw, 0, 1),
           heading: screenAngle(current.yaw, Math.cos(player.heading), Math.sin(player.heading)),
           wave:
@@ -1268,6 +1365,14 @@ export async function createCityScene(
         prompt: here ? { label: here.label, name: here.place.name } : null,
         radarOn: game.radarOn,
         objective,
+        survivors: {
+          following,
+          sheltered,
+          hiding,
+          lost: game.stats.lost,
+          saved: game.stats.saved,
+          total: cv.placed,
+        },
         inside:
           game.inside >= 0
             ? {
@@ -1382,6 +1487,31 @@ export async function createCityScene(
             }
             return placed;
           },
+          people() {
+            const c = game.civilians;
+            return Array.from({ length: c.count }, (_, i) => ({
+              x: c.x[i],
+              y: c.y[i],
+              state: c.state[i],
+            }));
+          },
+          teleport(x, y) {
+            game.player = { ...game.player, x, y, vx: 0, vy: 0 };
+            player = previous = game.player;
+          },
+          callPeople(count) {
+            const c = game.civilians;
+            let n = 0;
+            for (let i = 0; i < c.count && n < count; i++) {
+              if (c.state[i] !== CState.HIDING && c.state[i] !== CState.FOLLOWING) continue;
+              const a = (n / Math.max(1, count)) * Math.PI * 2 + 0.5;
+              c.x[i] = player.x + Math.cos(a) * (3 + (n % 3));
+              c.y[i] = player.y + Math.sin(a) * (3 + (n % 3));
+              c.state[i] = CState.FOLLOWING;
+              n++;
+            }
+            return n;
+          },
           autoAim(on) {
             debugAutoAim = on;
           },
@@ -1422,6 +1552,11 @@ export async function createCityScene(
             used: game.used.filter(Boolean).length,
             inside: game.inside,
             door: game.inside >= 0 ? game.doors[game.inside] : -1,
+            following: countIn(game.civilians, CState.FOLLOWING),
+            sheltered: countIn(game.civilians, CState.SHELTERED),
+            hiding: countIn(game.civilians, CState.HIDING),
+            lost: game.stats.lost,
+            saved: game.stats.saved,
           }),
         }
       : undefined,

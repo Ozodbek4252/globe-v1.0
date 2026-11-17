@@ -88,16 +88,41 @@ function push(n: GameNotice): void {
       announcement.value = `Inside ${n.place}. Rest here, but watch the door.`;
       later(() => toast.value?.id === id && (toast.value = null), 3200);
       break;
-    case 'breach':
+    case 'breach': {
+      const people =
+        n.lost > 0 ? ` ${plural(n.lost, 'person', 'people')} behind it did not survive.` : '';
       banner.value = {
         id,
         tone: 'wave',
         title: 'The door gave way',
-        sub: `${n.place} is lost. Run, or make a stand.`,
+        sub: `${n.place} is lost.${people}`,
         angle: null,
       };
-      announcement.value = `The door of ${n.place} gave way. The shelter is lost.`;
-      later(() => banner.value?.id === id && (banner.value = null), 5000);
+      announcement.value = `The door of ${n.place} gave way. The shelter is lost.${people}`;
+      later(() => banner.value?.id === id && (banner.value = null), 5500);
+      break;
+    }
+    case 'recruit':
+      toast.value = {
+        id,
+        text:
+          n.following === 1
+            ? 'A survivor joins you'
+            : `A survivor joins you · ${n.following} with you`,
+      };
+      announcement.value = `A survivor joins you. ${plural(n.following, 'survivor')} with you.`;
+      later(() => toast.value?.id === id && (toast.value = null), 2400);
+      break;
+    case 'sheltered':
+      toast.value = { id, text: `${plural(n.count, 'survivor')} safe inside` };
+      announcement.value = `${plural(n.count, 'survivor')} went inside ${n.place} with you.`;
+      later(() => toast.value?.id === id && (toast.value = null), 2800);
+      break;
+    case 'civilianDown':
+      toast.value = { id, text: 'Someone did not make it' };
+      announcement.value = 'A survivor was killed.';
+      hits.value = hits.value.slice(-3);
+      later(() => toast.value?.id === id && (toast.value = null), 2400);
       break;
     case 'radar':
       banner.value = {
@@ -178,6 +203,11 @@ const accuracy = computed(() =>
         <span class="hud-sub"
           >Wave {{ player.wave }} · {{ plural(player.zombies, 'zombie') }} out there ·
           {{ plural(player.near, 'zombie') }} near · {{ plural(player.kills, 'kill') }}</span
+        >
+        <span v-if="player.survivors.total > 0" class="hud-sub hud-people"
+          >Survivors: {{ player.survivors.following }} with you ·
+          {{ player.survivors.sheltered }} inside · {{ player.survivors.hiding }} hiding ·
+          {{ player.survivors.lost }} lost</span
         >
         <span v-if="player.objective" class="hud-objective">
           <span
@@ -280,6 +310,10 @@ const accuracy = computed(() =>
           <dd>{{ over.kills }}</dd>
           <dt>Accuracy</dt>
           <dd>{{ accuracy }}% ({{ over.hits }} of {{ over.shots }})</dd>
+          <template v-if="over.total > 0">
+            <dt>Survivors saved</dt>
+            <dd>{{ over.saved }} of {{ over.total }}</dd>
+          </template>
           <dt>Waves faced</dt>
           <dd>{{ over.waves }}</dd>
           <dt>Damage taken</dt>
@@ -396,6 +430,9 @@ const accuracy = computed(() =>
   font-size: 12px;
   color: var(--muted);
 }
+.hud-people {
+  color: #b8f0c0;
+}
 .hud-objective {
   margin-top: 4px;
   padding: 3px 12px;
@@ -492,7 +529,7 @@ const accuracy = computed(() =>
 /* ---- announcements */
 .hud-banner {
   position: absolute;
-  top: 204px;
+  top: 224px;
   left: 50%;
   transform: translateX(-50%);
   display: grid;

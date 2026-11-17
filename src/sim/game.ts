@@ -5,7 +5,19 @@
 // kill, a hit taken) is queued as an event for the renderer to drain.
 
 import { createRng, nextFloat, nextInt, nextRange, type Rng } from '../lib/rng';
-import type { Colliders } from './colliders';
+import {
+  createCivilians,
+  CState,
+  evacuate,
+  hideCivilians,
+  hurtCivilian,
+  loseShelter,
+  occupants,
+  stepCivilians,
+  takeShelter,
+  type Civilians,
+} from './civilians';
+import { findSpawn, type Colliders } from './colliders';
 import {
   buildNavGrid,
   createFlowField,
@@ -16,6 +28,7 @@ import {
 } from './flow';
 import {
   createHorde,
+  createTargets,
   damageZombie,
   isAlive,
   sendHunting,
@@ -26,6 +39,7 @@ import {
   ZState,
   type Horde,
   type Noise,
+  type Targets,
 } from './horde';
 import { choosePlaces, PLACES, type Place, type PlaceBuilding } from './places';
 import { createPlayer, speedOf, stepPlayer, PLAYER, type PlayerState } from './player';
@@ -79,6 +93,8 @@ export const GAME = {
   },
   capacity: 1000,
   clumps: 70,
+  /** Survivors hiding around the map at the start. */
+  civilians: 10,
   waves: {
     first: 20,
     every: 40,
@@ -147,11 +163,19 @@ export type GameEvent =
   | { type: 'leave'; place: number }
   /** The door of the shelter you are in took a beating; `fraction` of it is left (0 to 1). */
   | { type: 'door'; place: number; fraction: number }
-  /** The door gave way: the horde is in, and the shelter is lost. */
-  | { type: 'breach'; place: number }
+  /** The door gave way: the horde is in, and the shelter is lost, with `lost` people behind it. */
+  | { type: 'breach'; place: number; lost: number }
+  /** Someone hiding has joined the survivor: `following` is how many are with them now. */
+  | { type: 'recruit'; following: number }
+  /** `count` followers went into a shelter with the survivor. */
+  | { type: 'sheltered'; count: number; place: number }
+  /** Someone was killed (in the open) at this spot. */
+  | { type: 'civilianDown'; x: number; y: number }
+  /** The helicopter landed and took `count` people. */
+  | { type: 'saved'; count: number }
   | { type: 'wave'; number: number; size: number; angle: number }
   /** The helicopter is coming: `angle` is the direction it flies in from, `seconds` how long until it is here. */
-  | { type: 'rescue'; angle: number; seconds: number }
+  | { type: 'rescue'; angle: number; seconds: number; x: number; y: number }
   | { type: 'won' }
   | { type: 'lost' };
 
@@ -210,6 +234,8 @@ export interface GameOptions {
   /** Turn the waves off (for tests). */
   waves?: boolean;
   capacity?: number;
+  /** Survivors hiding around the map. 0 for none. */
+  civilians?: number;
 }
 
 export interface GameStats {
@@ -218,6 +244,10 @@ export interface GameStats {
   hits: number;
   damageTaken: number;
   shoves: number;
+  /** How many survivors have joined you, died, and been saved. */
+  recruited: number;
+  lost: number;
+  saved: number;
 }
 
 export interface GameState {
@@ -249,6 +279,12 @@ export interface GameState {
   wavesOn: boolean;
   /** Which places have been used up: shops and the armory once searched, the radar once powered. */
   used: boolean[];
+  /** The people to save. */
+  civilians: Civilians;
+  /** What zombies can go for besides the survivor: each civilian, then each place's door. */
+  targets: Targets;
+  /** Where the helicopter will land, once it has been heard. */
+  landing: [number, number] | null;
   /** The radar is on, so the horde and the next wave are visible. */
   radarOn: boolean;
   /** The shelter the survivor is in (a place id), or -1. */
@@ -310,6 +346,9 @@ export function createGame(world: GameWorld, options: GameOptions): GameState {
     waveAngle: nextFloat(rng) * Math.PI * 2,
     wavesOn: options.waves ?? true,
     used: world.places.map(() => false),
+    civilians: createCivilians(options.civilians ?? GAME.civilians),
+    targets: createTargets((options.civilians ?? GAME.civilians) + world.places.length),
+    landing: null,
     radarOn: false,
     inside: -1,
     doors: world.places.map((p) => (p.kind === 'shelter' ? GAME.shelter.door : 0)),
@@ -317,12 +356,22 @@ export function createGame(world: GameWorld, options: GameOptions): GameState {
     doorEventTimer: 0,
     inbound: false,
     inboundTimer: 0,
-    stats: { kills: 0, shots: 0, hits: 0, damageTaken: 0, shoves: 0 },
+    stats: {
+      kills: 0,
+      shots: 0,
+      hits: 0,
+      damageTaken: 0,
+      shoves: 0,
+      recruited: 0,
+      lost: 0,
+      saved: 0,
+    },
     events: [],
     rng,
   };
   scatterPickups(g, world);
   scatterClumps(g, world, options.clumps ?? GAME.clumps);
+  hideCivilians(g.civilians, world, rng, [options.startX, options.startY]);
   return g;
 }
 
@@ -471,11 +520,36 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
 
     if (g.wavesOn && g.time >= g.nextWave) spawnWave(g, world);
 
+    // the people to save: they join you when you come near, and follow
+    const recruited = stepCivilians(
+      g.civilians,
+      { colliders, flow: g.flow, px: p.x, py: p.y, hidden: g.inside >= 0, playing: true },
+      dt,
+    );
+    if (recruited > 0) {
+      g.stats.recruited += recruited;
+      emit(g, { type: 'recruit', following: countFollowing(g) });
+    }
+
     // the helicopter's engines carry for miles: for its last seconds, everything comes
     if (g.time >= g.rescueAt - GAME.inbound) {
       if (!g.inbound) {
         g.inbound = true;
-        emit(g, { type: 'rescue', angle: nextFloat(g.rng) * Math.PI * 2, seconds: GAME.inbound });
+        // it lands on open ground a little ahead of the way the survivor is facing
+        const [lx, ly] = findSpawn(
+          colliders,
+          [p.x + Math.cos(p.heading) * 11, p.y + Math.sin(p.heading) * 11],
+          35,
+          7,
+        );
+        g.landing = [lx, ly];
+        emit(g, {
+          type: 'rescue',
+          angle: nextFloat(g.rng) * Math.PI * 2,
+          seconds: GAME.inbound,
+          x: lx,
+          y: ly,
+        });
       }
       g.inboundTimer -= dt;
       if (g.inboundTimer <= 0) {
@@ -496,6 +570,7 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
     g.flowTimer = 0.25;
   }
 
+  refreshTargets(g, world, playing);
   const damage = stepHorde(
     g.horde,
     {
@@ -507,6 +582,7 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
       py: g.player.y,
       playerAlive: playing,
       hidden: playing && g.inside >= 0,
+      targets: g.targets,
       noises: g.noises,
     },
     dt,
@@ -514,8 +590,11 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
   );
 
   if (playing) {
-    if (g.inside >= 0 && g.horde.doorDamage > 0) batterDoor(g, world, g.horde.doorDamage);
     g.doorEventTimer = Math.max(0, g.doorEventTimer - dt);
+    // zombies that were after the survivor (indoors) hit the door they are behind...
+    if (g.inside >= 0 && g.horde.doorDamage > 0) damageDoor(g, world, g.inside, g.horde.doorDamage);
+    // ...and those after other people hit them, or the doors that hide them
+    applyTargetDamage(g, world);
     if (damage > 0) hurt(g, damage, g.horde.lastHitX, g.horde.lastHitY);
     if (g.health <= 0) {
       g.health = 0;
@@ -524,39 +603,101 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
       emit(g, { type: 'lost' });
     } else if (g.time >= g.rescueAt) {
       g.status = 'won';
+      // the helicopter takes the followers near it and everyone safe behind a door that held
+      const [lx, ly] = g.landing ?? [g.player.x, g.player.y];
+      g.stats.saved = evacuate(g.civilians, lx, ly);
+      emit(g, { type: 'saved', count: g.stats.saved });
       emit(g, { type: 'won' });
     }
   }
 }
 
-/** Zombies are hammering the door of the shelter the survivor is in. If it gives way, they are in. */
-function batterDoor(g: GameState, world: GameWorld, blows: number): void {
-  const id = g.inside;
+/** How many people are with the survivor now. */
+export function countFollowing(g: GameState): number {
+  let n = 0;
+  for (let i = 0; i < g.civilians.count; i++) if (g.civilians.state[i] === CState.FOLLOWING) n++;
+  return n;
+}
+
+/** Fill the target slots for this step: each person in the open, then each shelter door with someone behind it. */
+function refreshTargets(g: GameState, world: GameWorld, playing: boolean): void {
+  const t = g.targets;
+  const c = g.civilians;
+  for (let i = 0; i < c.count; i++) {
+    const live = playing && (c.state[i] === CState.HIDING || c.state[i] === CState.FOLLOWING);
+    t.active[i] = live ? 1 : 0;
+    t.x[i] = c.x[i];
+    t.y[i] = c.y[i];
+  }
+  for (const place of world.places) {
+    const k = c.count + place.id;
+    const watched =
+      playing && place.kind === 'shelter' && !g.breached[place.id] && occupants(c, place.id) > 0;
+    t.active[k] = watched ? 1 : 0;
+    t.x[k] = place.x;
+    t.y[k] = place.y;
+  }
+}
+
+/** Apply what zombies did to the people and doors they went for, and clear it. */
+function applyTargetDamage(g: GameState, world: GameWorld): void {
+  const t = g.targets;
+  const c = g.civilians;
+  for (let i = 0; i < c.count; i++) {
+    if (t.damage[i] <= 0) continue;
+    const x = c.x[i];
+    const y = c.y[i];
+    if (hurtCivilian(c, i, t.damage[i])) {
+      g.stats.lost++;
+      emit(g, { type: 'civilianDown', x, y });
+    }
+    t.damage[i] = 0;
+  }
+  for (const place of world.places) {
+    const k = c.count + place.id;
+    if (t.damage[k] <= 0) continue;
+    if (!g.breached[place.id]) damageDoor(g, world, place.id, t.damage[k]);
+    t.damage[k] = 0;
+  }
+}
+
+/** Zombies are hitting a shelter's door. If it gives way they are in: everyone behind it is lost. */
+function damageDoor(g: GameState, world: GameWorld, id: number, blows: number): void {
   const place = world.places[id];
   g.doors[id] = Math.max(0, g.doors[id] - blows * GAME.shelter.doorFactor);
   if (g.doors[id] <= 0) {
-    g.breached[id] = true;
-    g.inside = -1;
-    emit(g, { type: 'breach', place: id });
-    hurt(g, GAME.shelter.breachDamage, place.x + place.nx, place.y + place.ny);
-    // the door bursts open and throws back whatever is at it: a moment to run or fight
-    const h = g.horde;
-    const r = GAME.shelter.breachBlast;
-    for (let i = 0; i < h.used; i++) {
-      if (!isAlive(h, i)) continue;
-      const dx = h.x[i] - place.x;
-      const dy = h.y[i] - place.y;
-      const d = Math.hypot(dx, dy);
-      if (d > r) continue;
-      const away = d > 1e-3 ? [dx / d, dy / d] : [place.nx, place.ny];
-      shoveZombie(h, i, away[0], away[1], GAME.shelter.breachBlastSpeed, GAME.shelter.breachStun);
-    }
+    breach(g, world, id);
     return;
   }
   // tell the picture, but not sixty times a second
-  if (g.doorEventTimer <= 0) {
+  if (g.inside === id && g.doorEventTimer <= 0) {
     g.doorEventTimer = 0.4;
-    emit(g, { type: 'door', place: id, fraction: g.doors[id] / GAME.shelter.door });
+    emit(g, { type: 'door', place: place.id, fraction: g.doors[id] / GAME.shelter.door });
+  }
+}
+
+/** The door gave way. The survivor (if inside) is thrown out hurt, anyone else behind it is lost. */
+function breach(g: GameState, world: GameWorld, id: number): void {
+  const place = world.places[id];
+  g.breached[id] = true;
+  const lost = loseShelter(g.civilians, id);
+  g.stats.lost += lost;
+  emit(g, { type: 'breach', place: id, lost });
+  if (g.inside === id) {
+    g.inside = -1;
+    hurt(g, GAME.shelter.breachDamage, place.x + place.nx, place.y + place.ny);
+  }
+  // the door bursts open and throws back whatever is at it: a moment to run or fight
+  const h = g.horde;
+  const r = GAME.shelter.breachBlast;
+  for (let i = 0; i < h.used; i++) {
+    if (!isAlive(h, i)) continue;
+    const dx = h.x[i] - place.x;
+    const dy = h.y[i] - place.y;
+    const d = Math.hypot(dx, dy);
+    if (d > r) continue;
+    const away = d > 1e-3 ? [dx / d, dy / d] : [place.nx, place.ny];
+    shoveZombie(h, i, away[0], away[1], GAME.shelter.breachBlastSpeed, GAME.shelter.breachStun);
   }
 }
 
@@ -752,6 +893,9 @@ function interact(g: GameState, world: GameWorld): boolean {
       g.player = { ...g.player, vx: 0, vy: 0, sprinting: false };
       g.reloading = 0; // the reload is forgotten while the door closes: simpler than a half-finished one
       emit(g, { type: 'enter', place: place.id });
+      // everyone following you who is near the door goes in with you
+      const taken = takeShelter(g.civilians, place.id, place.x, place.y);
+      if (taken > 0) emit(g, { type: 'sheltered', count: taken, place: place.id });
     }
     return true;
   }

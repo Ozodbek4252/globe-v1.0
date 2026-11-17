@@ -63,7 +63,12 @@ export interface ZombieRenderer {
   dispose(): void;
 }
 
-function tag(g: BufferGeometry, colour: Color, limb: number, pivot: number): BufferGeometry {
+export function tagLimbs(
+  g: BufferGeometry,
+  colour: Color,
+  limb: number,
+  pivot: number,
+): BufferGeometry {
   const n = g.getAttribute('position').count;
   const colours = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) {
@@ -87,43 +92,43 @@ function buildBody(): BufferGeometry {
   const torso = new CapsuleGeometry(0.2, 0.4, 4, 8);
   torso.rotateX(0.3);
   torso.translate(0, 1.08, 0.05);
-  parts.push(tag(torso, SHIRT, 0, 0));
+  parts.push(tagLimbs(torso, SHIRT, 0, 0));
 
   const head = new SphereGeometry(0.14, 10, 8);
   head.translate(0, 1.55, 0.2);
-  parts.push(tag(head, SKIN, 0, 0));
+  parts.push(tagLimbs(head, SKIN, 0, 0));
 
   const jaw = new BoxGeometry(0.16, 0.07, 0.1);
   jaw.translate(0, 1.44, 0.27);
-  parts.push(tag(jaw, SKIN, 0, 0));
+  parts.push(tagLimbs(jaw, SKIN, 0, 0));
 
   for (const side of [-1, 1]) {
     // legs hang from the hips
     const leg = new CapsuleGeometry(0.085, 0.5, 3, 6);
     leg.translate(0, -0.335, 0);
     leg.translate(side * 0.11, 0.84, 0);
-    parts.push(tag(leg, TROUSERS, side, 0.84));
+    parts.push(tagLimbs(leg, TROUSERS, side, 0.84));
 
     // arms reach out in front, hanging from the shoulders
     const arm = new CapsuleGeometry(0.065, 0.42, 3, 6);
     arm.translate(0, -0.275, 0);
     arm.rotateX(-1.25);
     arm.translate(side * 0.27, 1.36, 0.06);
-    parts.push(tag(arm, SKIN, -side * 0.3, 1.36));
+    parts.push(tagLimbs(arm, SKIN, -side * 0.3, 1.36));
   }
   const merged = mergeGeometries(parts, false);
   for (const p of parts) p.dispose();
   return merged;
 }
 
-const LIMB_ATTRIBUTES = /* glsl */ `
+export const LIMB_ATTRIBUTES = /* glsl */ `
 attribute float aLimb;
 attribute float aPivot;
 attribute float aPhase;
 attribute float aAmp;
 `;
 
-const LIMB_SWING = /* glsl */ `
+export const LIMB_SWING = /* glsl */ `
 {
   float swing = sin(aPhase) * aAmp * aLimb;
   float c = cos(swing);

@@ -3,6 +3,7 @@ import { buildColliders, insideBuilding, type ColliderSource } from '../src/sim/
 import { buildNavGrid, createFlowField, reachableFrom, updateFlow } from '../src/sim/flow';
 import {
   createHorde,
+  createTargets,
   damageZombie,
   hordeChecksum,
   sendHunting,
@@ -374,5 +375,134 @@ describe('determinism', () => {
 
   it('plays differently for another seed', () => {
     expect(play(7)).not.toBe(play(8));
+  });
+});
+
+describe('going for other targets', () => {
+  /** A map, a few target slots, and a way to run the horde with them. */
+  function withTargets(extra: Partial<ColliderSource> = {}) {
+    const a = arena(extra);
+    const targets = createTargets(4);
+    let tick = 0;
+    const run = (h: Horde, px: number, py: number, seconds: number): void => {
+      const ctx: HordeContext = { ...a.context(px, py), targets };
+      for (let s = 0; s < Math.round(seconds / DT); s++) stepHorde(h, ctx, DT, tick++);
+    };
+    const put = (slot: number, x: number, y: number): void => {
+      targets.x[slot] = x;
+      targets.y[slot] = y;
+      targets.active[slot] = 1;
+    };
+    return { ...a, targets, run, put };
+  }
+
+  it('walks up to someone in the open and hurts them, though the survivor is far away', () => {
+    const { run, put, targets } = withTargets();
+    const h = createHorde(2, 1);
+    const i = standing(h, 10, 0, Math.PI); // facing the target at the origin
+    put(0, 0, 0);
+    run(h, 120, 120, 8);
+    expect(h.victim[i]).toBe(0);
+    expect(targets.damage[0]).toBeGreaterThanOrEqual(ZOMBIE.kinds[ZKind.WALKER].damage);
+    expect(targets.damage[0] % ZOMBIE.kinds[ZKind.WALKER].damage).toBe(0);
+  });
+
+  it('does not strike before its windup, and keeps to its cooldown', () => {
+    const { run, put, targets } = withTargets();
+    const h = createHorde(2, 1);
+    const i = spawnZombie(h, 1, 0, ZKind.WALKER, ZState.WANDER);
+    h.timer[i] = 1000;
+    put(0, 0, 0);
+    run(h, 120, 120, 0.4); // notices them (smell), starts to strike, 0.5 s windup
+    expect(targets.damage[0]).toBe(0);
+    run(h, 120, 120, 3);
+    const kind = ZOMBIE.kinds[ZKind.WALKER];
+    expect(targets.damage[0]).toBeLessThanOrEqual(kind.damage * 2); // not a blow per step
+    expect(targets.damage[0]).toBeGreaterThan(0);
+  });
+
+  it('ignores an empty slot, a target out of range, and one behind a wall', () => {
+    const { run, put, targets } = withTargets({ buildings: [{ outer: sq(5, -10, 1, 20) }] });
+    const h = createHorde(4, 1);
+    const empty = standing(h, 10, 40, Math.PI);
+    targets.x[1] = 10;
+    targets.y[1] = 40; // slot 1 is inactive
+    const far = standing(h, 60, -60, Math.PI);
+    put(0, 60 - 30, -60); // 30 m from `far`
+    const blocked = standing(h, 12, 0, Math.PI);
+    put(2, -2, 0); // on the other side of the wall
+    run(h, 120, 120, 4);
+    expect(h.victim[empty]).toBe(-1);
+    expect(h.victim[far]).toBe(-1);
+    expect(h.victim[blocked]).toBe(-1);
+    expect(targets.damage[2]).toBe(0);
+  });
+
+  it('smells someone close by even from behind', () => {
+    const { run, put } = withTargets();
+    const h = createHorde(2, 1);
+    const i = standing(h, 3, 0, 0); // facing away, 3 m off
+    put(0, 0, 0);
+    run(h, 120, 120, 0.6);
+    expect(h.victim[i]).toBe(0);
+  });
+
+  it('lets go when the target is gone', () => {
+    const { run, put, targets } = withTargets();
+    const h = createHorde(2, 1);
+    const i = standing(h, 8, 0, Math.PI);
+    put(0, 0, 0);
+    run(h, 120, 120, 1.5);
+    expect(h.victim[i]).toBe(0);
+    targets.active[0] = 0;
+    run(h, 120, 120, 2);
+    expect(h.victim[i]).toBe(-1);
+    expect(h.state[i]).not.toBe(ZState.ATTACK);
+  });
+
+  it('prefers the survivor when the survivor is close', () => {
+    const { run, put } = withTargets();
+    const h = createHorde(2, 1);
+    const i = standing(h, 12, 0, Math.PI);
+    put(0, 0, 8); // a target 14 m away to one side
+    run(h, 8, 0, 1); // the survivor is 4 m off, straight ahead
+    expect(h.victim[i]).toBe(-1);
+    expect(h.state[i]).toBe(ZState.CHASE);
+  });
+
+  it('is turned from the trail by someone right in its path', () => {
+    const { run, put } = withTargets();
+    const h = createHorde(2, 1);
+    const i = spawnZombie(h, 30, 0, ZKind.WALKER, ZState.CHASE);
+    sendHunting(h, i, 300); // on the survivor's trail, far away at (-100, 0)
+    put(0, 20, 0); // right on its way
+    run(h, -100, 0, 6);
+    expect(h.victim[i]).toBe(0);
+  });
+
+  it('turns on whoever shoots it, not on whoever it was after', () => {
+    const { run, put } = withTargets();
+    const h = createHorde(2, 1);
+    const i = standing(h, 6, 0, Math.PI);
+    put(0, 0, 0);
+    run(h, 120, 120, 1);
+    expect(h.victim[i]).toBe(0);
+    damageZombie(h, i, 10, 50, 0);
+    expect(h.victim[i]).toBe(-1);
+  });
+
+  it('never leaves a stale victim behind when its mind changes', () => {
+    const { run, put } = withTargets();
+    const h = createHorde(8, 3);
+    for (let k = 0; k < 6; k++) standing(h, 10 + k, k, Math.PI);
+    put(0, 0, 0);
+    put(1, 4, 8);
+    for (let step = 0; step < 6; step++) {
+      run(h, 120, 120, 1);
+      for (let k = 0; k < 6; k++) {
+        const v = h.victim[k];
+        if (v >= 0) expect([ZState.CHASE, ZState.ATTACK]).toContain(h.state[k]);
+      }
+    }
   });
 });

@@ -50,6 +50,9 @@ export const ZOMBIE = {
   loseTrack: 6,
   /** A chasing zombie rouses others this close. */
   alertRadius: 9,
+  /** How far it sees a target in the open (with a clear line), and how far it notices one while chasing. */
+  targetSight: 16,
+  targetNear: 5,
   /** Each zombie thinks (senses) once every this many steps, staggered across the horde. */
   perceptionEvery: 12,
   /** Seconds a body lies there. */
@@ -73,8 +76,36 @@ export interface Noise {
   ttl: number;
 }
 
+/**
+ * Other things a zombie can go for besides the survivor: people hiding or walking in the open, and the
+ * doors of shelters with people behind them. Slots are stable (a zombie remembers its target by slot), so
+ * the caller fills and empties slots, and zombies never learn who is in them.
+ */
+export interface Targets {
+  /** Number of slots. */
+  count: number;
+  x: Float32Array;
+  y: Float32Array;
+  /** 1 when the slot holds something to go for. */
+  active: Uint8Array;
+  /** Damage zombies have dealt to each slot. The caller applies it and clears it. */
+  damage: Float32Array;
+}
+
+export function createTargets(count: number): Targets {
+  return {
+    count,
+    x: new Float32Array(count),
+    y: new Float32Array(count),
+    active: new Uint8Array(count),
+    damage: new Float32Array(count),
+  };
+}
+
 export interface HordeContext {
   world: Colliders;
+  /** Anything else to go for. Optional: with none, zombies only ever hunt the survivor. */
+  targets?: Targets;
   nav: NavGrid;
   /** The flow field toward the survivor; the caller keeps it up to date. */
   flow: FlowField;
@@ -130,6 +161,8 @@ export interface Horde {
   ty: Float32Array;
   /** Seconds spent pushing against something without getting anywhere. */
   stuck: Float32Array;
+  /** The target slot this zombie is going for instead of the survivor, or -1. */
+  victim: Int16Array;
   kind: Uint8Array;
   state: Uint8Array;
   /** Attack phase: 0 winding up, 1 recovering. */
@@ -171,6 +204,7 @@ export function createHorde(capacity: number, seed: number): Horde {
     tx: new Float32Array(capacity),
     ty: new Float32Array(capacity),
     stuck: new Float32Array(capacity),
+    victim: new Int16Array(capacity).fill(-1),
     kind: new Uint8Array(capacity),
     state: new Uint8Array(capacity).fill(ZState.FREE),
     phase: new Uint8Array(capacity),
@@ -222,6 +256,7 @@ export function spawnZombie(
   h.tx[i] = Number.NaN;
   h.ty[i] = Number.NaN;
   h.stuck[i] = 0;
+  h.victim[i] = -1;
   h.kind[i] = kind;
   h.state[i] = state;
   h.phase[i] = 0;
@@ -273,6 +308,7 @@ export function damageZombie(
   // it knows where the blow came from, so if it loses sight it goes to that spot
   h.tx[i] = fromX;
   h.ty[i] = fromY;
+  h.victim[i] = -1; // and it turns on whoever did it, not on whoever it was after
   return false;
 }
 
@@ -404,6 +440,24 @@ function perceive(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number
     }
   }
 
+  const targets = ctx.targets;
+
+  // A zombie already going for a target stays on it while it is there and not far off, unless the
+  // survivor turns up close by.
+  const victim = h.victim[i];
+  if (victim >= 0) {
+    const stillThere =
+      targets !== undefined &&
+      targets.active[victim] === 1 &&
+      (targets.x[victim] - x) ** 2 + (targets.y[victim] - y) ** 2 < 22 * 22;
+    if (stillThere && !(aware && d < ZOMBIE.targetNear)) return;
+    if (stillThere) h.victim[i] = -1;
+    else {
+      dropVictim(h, i);
+      if (!aware) return;
+    }
+  }
+
   if (aware) {
     if (s !== ZState.CHASE) rouse(h, i, ctx);
     h.timer[i] = 0;
@@ -411,6 +465,37 @@ function perceive(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number
     h.ty[i] = ctx.py;
     return;
   }
+
+  // not aware of the survivor: is there someone else worth going for?
+  if (targets) {
+    const reach = s === ZState.CHASE ? ZOMBIE.targetNear : ZOMBIE.targetSight;
+    let best = -1;
+    let bestD2 = reach * reach;
+    for (let k = 0; k < targets.count; k++) {
+      if (targets.active[k] !== 1) continue;
+      const dx = targets.x[k] - x;
+      const dy = targets.y[k] - y;
+      const dd = dx * dx + dy * dy;
+      if (dd >= bestD2) continue;
+      // close by, it smells them through anything; farther off it needs a clear line
+      if (
+        dd > ZOMBIE.smell * ZOMBIE.smell &&
+        !lineOfSight(ctx.world, x, y, targets.x[k], targets.y[k])
+      ) {
+        continue;
+      }
+      best = k;
+      bestD2 = dd;
+    }
+    if (best >= 0) {
+      h.victim[i] = best;
+      h.state[i] = ZState.CHASE;
+      h.timer[i] = 0;
+      h.stuck[i] = 0;
+      return;
+    }
+  }
+
   if (s === ZState.CHASE) {
     h.timer[i] += interval;
     if (h.timer[i] > ZOMBIE.loseTrack) {
@@ -435,6 +520,15 @@ function perceive(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number
       return;
     }
   }
+}
+
+/** Stop going for a target and drift off. */
+function dropVictim(h: Horde, i: number): void {
+  h.victim[i] = -1;
+  h.state[i] = ZState.WANDER;
+  h.timer[i] = 1;
+  h.tx[i] = Number.NaN;
+  h.stuck[i] = 0;
 }
 
 /** A zombie has just spotted the survivor: it starts to chase and its groans bring the neighbours. */
@@ -467,6 +561,10 @@ function rouse(h: Horde, i: number, ctx: HordeContext): void {
 }
 
 function act(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number): void {
+  // a victim only means something while chasing or striking
+  if (h.victim[i] >= 0 && h.state[i] !== ZState.CHASE && h.state[i] !== ZState.ATTACK) {
+    h.victim[i] = -1;
+  }
   if (h.stun[i] > 0) {
     h.stun[i] -= dt;
     const k = Math.exp(-6 * dt);
@@ -597,11 +695,36 @@ function investigate(h: Horde, i: number, ctx: HordeContext, dt: number): void {
   walk(h, i, ctx, dirX, dirY, ZOMBIE.investigateSpeed * h.pace[i], dt);
 }
 
+/** Walk straight at a target and strike it when close. A target out of reach round a wall is given up on. */
+function chaseVictim(h: Horde, i: number, ctx: HordeContext, dt: number): void {
+  const t = ctx.targets;
+  const v = h.victim[i];
+  if (!t || t.active[v] !== 1 || h.stuck[i] > 2) {
+    dropVictim(h, i);
+    return;
+  }
+  const dx = t.x[v] - h.x[i];
+  const dy = t.y[v] - h.y[i];
+  const d = Math.hypot(dx, dy);
+  if (d < ZOMBIE.attackStart && lineOfSight(ctx.world, h.x[i], h.y[i], t.x[v], t.y[v])) {
+    h.state[i] = ZState.ATTACK;
+    h.phase[i] = 0;
+    h.attackT[i] = 0;
+    return;
+  }
+  walk(h, i, ctx, dx / (d || 1), dy / (d || 1), ZOMBIE.kinds[h.kind[i]].chase * h.pace[i], dt);
+}
+
 function chase(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number): void {
   if (!ctx.playerAlive) {
+    h.victim[i] = -1;
     h.state[i] = ZState.WANDER;
     h.tx[i] = Number.NaN;
     h.timer[i] = 1;
+    return;
+  }
+  if (h.victim[i] >= 0) {
+    chaseVictim(h, i, ctx, dt);
     return;
   }
   // A zombie that cannot see the survivor (indoors) only follows a cold trail: once it has gone
@@ -635,40 +758,46 @@ function chase(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number): 
 
 function attack(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number): void {
   const kind = ZOMBIE.kinds[h.kind[i]];
-  const d = Math.sqrt(d2);
   walk(h, i, ctx, 0, 0, 0, dt); // plant its feet
-  // face the survivor
-  const want = Math.atan2(ctx.py - h.y[i], ctx.px - h.x[i]);
+
+  // who it is striking: a target slot if it has one that is still there, otherwise the survivor
+  const v = h.victim[i];
+  const targets = v >= 0 && ctx.targets?.active[v] === 1 ? ctx.targets : undefined;
+  const aimX = targets ? targets.x[v] : ctx.px;
+  const aimY = targets ? targets.y[v] : ctx.py;
+  const d = targets ? Math.hypot(aimX - h.x[i], aimY - h.y[i]) : Math.sqrt(d2);
+
+  const want = Math.atan2(aimY - h.y[i], aimX - h.x[i]);
   const turn = angleDelta(h.heading[i], want);
   const most = ZOMBIE.turnRate * 1.5 * dt;
   h.heading[i] += Math.abs(turn) <= most ? turn : Math.sign(turn) * most;
 
   h.attackT[i] += dt;
-  if (ctx.playerAlive && d < ZOMBIE.attackReach) h.engaged++;
+  if (!targets && ctx.playerAlive && d < ZOMBIE.attackReach) h.engaged++;
   if (h.phase[i] === 0) {
     if (h.attackT[i] >= kind.windup) {
-      if (
-        ctx.playerAlive &&
-        d <= ZOMBIE.attackReach &&
-        lineOfSight(ctx.world, h.x[i], h.y[i], ctx.px, ctx.py)
-      ) {
-        if (ctx.hidden) h.doorDamage += kind.damage;
-        else {
-          h.damage += kind.damage;
-          h.lastHitX = h.x[i];
-          h.lastHitY = h.y[i];
+      if (d <= ZOMBIE.attackReach && lineOfSight(ctx.world, h.x[i], h.y[i], aimX, aimY)) {
+        if (targets) targets.damage[v] += kind.damage;
+        else if (ctx.playerAlive) {
+          if (ctx.hidden) h.doorDamage += kind.damage;
+          else {
+            h.damage += kind.damage;
+            h.lastHitX = h.x[i];
+            h.lastHitY = h.y[i];
+          }
         }
       }
       h.phase[i] = 1;
       h.attackT[i] = 0;
     }
   } else if (h.attackT[i] >= kind.cooldown) {
-    h.state[i] = ctx.playerAlive ? ZState.CHASE : ZState.WANDER;
-    // seeing the survivor refreshes the trail; battering a door they are behind does not
-    h.timer[i] = ctx.hidden ? h.timer[i] + kind.windup + kind.cooldown : 0;
+    h.state[i] = targets || ctx.playerAlive ? ZState.CHASE : ZState.WANDER;
+    // Seeing the survivor refreshes the trail; battering a door they are behind does not. (A target
+    // has no trail: the zombie either still has it in reach or lets go.)
+    h.timer[i] = ctx.hidden && !targets ? h.timer[i] + kind.windup + kind.cooldown : 0;
     h.phase[i] = 0;
     h.attackT[i] = 0;
-    if (!ctx.playerAlive) h.tx[i] = Number.NaN;
+    if (!targets && !ctx.playerAlive) h.tx[i] = Number.NaN;
   }
 }
 
