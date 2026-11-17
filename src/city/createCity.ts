@@ -58,7 +58,7 @@ import { sendHunting, spawnZombie, ZKind, ZState } from '../sim/horde';
 import { HState, spawnHuman } from '../sim/humans';
 import { speedOf, type PlayerState } from '../sim/player';
 import { isSavedGame, loadGame, saveGame, type SavedGame } from '../sim/save';
-import { CAR, createCar, onRoad, wrecked, type Car } from '../sim/vehicle';
+import { CAR, createCar, onRoad, type Car } from '../sim/vehicle';
 import {
   advanceLedger,
   ledgerOutside,
@@ -194,8 +194,8 @@ export interface PlayerStatus {
   population: { healthy: number; bitten: number; zombies: number; initial: number };
   /** What the survivor could do where they stand: use a door, get into a car (null when nothing). */
   prompt: { label: string; name: string } | null;
-  /** At the wheel: how fast (m/s), the tank (0 to 1), the car's condition (0 to 1); null on foot. */
-  car: { speed: number; fuel: number; condition: number; wrecked: boolean } | null;
+  /** At the wheel: how fast (m/s) and the tank (0 to 1); null on foot. */
+  car: { speed: number; fuel: number } | null;
   /** The radar is on: the minimap is available. */
   radarOn: boolean;
   /** The next goal, how far off it is, and where it lies on the screen (radians clockwise from up). */
@@ -235,8 +235,8 @@ export type GameNotice =
   | { type: 'radar'; place: string }
   | { type: 'enter'; place: string }
   | { type: 'breach'; place: string }
-  /** The car: got in, got out, a hard crash (`force` is the speed lost, m/s), the tank ran dry, or it was wrecked. */
-  | { type: 'car'; what: 'enter' | 'exit' | 'crash' | 'fuel' | 'wrecked'; force: number }
+  /** The car: got in, got out, a hard crash (`force` is the speed lost, m/s), or the tank ran dry. */
+  | { type: 'car'; what: 'enter' | 'exit' | 'crash' | 'fuel'; force: number }
   /** A new game has begun: forget everything announced. */
   | { type: 'respawn' }
   | { type: 'restart' }
@@ -1625,8 +1625,6 @@ export async function createCityScene(
             ? {
                 speed: Math.abs(game.cars[game.driving].speed),
                 fuel: game.cars[game.driving].fuel,
-                condition: game.cars[game.driving].hp / CAR.hp,
-                wrecked: wrecked(game.cars[game.driving]),
               }
             : null,
         radarOn: game.radarOn,

@@ -475,18 +475,6 @@ onBeforeUnmount(() => {
             <i :style="{ width: Math.round(player.car.fuel * 100) + '%' }"></i>
             <span>{{ player.car.fuel <= 0 ? 'Out of fuel' : 'Fuel' }}</span>
           </span>
-          <span
-            class="car-body"
-            :class="{ low: player.car.condition < 0.3, wrecked: player.car.wrecked }"
-            role="progressbar"
-            aria-label="Car condition"
-            aria-valuemin="0"
-            aria-valuemax="100"
-            :aria-valuenow="Math.round(player.car.condition * 100)"
-          >
-            <i :style="{ width: Math.round(player.car.condition * 100) + '%' }"></i>
-            <span>{{ player.car.wrecked ? 'Wrecked' : 'Car' }}</span>
-          </span>
         </div>
         <div
           v-if="player.camera === 'follow' && !player.car"
@@ -867,8 +855,7 @@ onBeforeUnmount(() => {
   font-size: 15px;
   font-weight: 600;
 }
-.car-fuel,
-.car-body {
+.car-fuel {
   position: relative;
   flex: 1 1 0;
   height: 16px;
@@ -878,27 +865,19 @@ onBeforeUnmount(() => {
   overflow: hidden;
   backdrop-filter: blur(6px);
 }
-.car-fuel i,
-.car-body i {
+.car-fuel i {
   position: absolute;
   inset: 0 auto 0 0;
   transition: width 0.2s linear;
-}
-.car-fuel i {
   background: linear-gradient(90deg, #6a8fcf, #9fc2ff);
 }
 .car-fuel.low i {
   background: #c98a2a;
 }
-.car-body i {
-  background: linear-gradient(90deg, #7b8f7a, #a9c3a4);
-}
-.car-body.low i,
 .car-fuel.empty i {
   background: #c9574d;
 }
-.car-fuel span,
-.car-body span {
+.car-fuel span {
   position: absolute;
   inset: 0;
   display: grid;

@@ -202,7 +202,16 @@ export function loadGame(world: GameWorld, saved: SavedGame): GameState {
   g.breached = [...s.breached];
   g.doorEventTimer = s.doorEventTimer;
   // (a game saved before there were cars keeps the ones just parked for it)
-  if (s.cars) g.cars = s.cars.map((c) => ({ ...c }));
+  if (s.cars) {
+    // (only what a car is now: a save from before may carry fields since dropped)
+    g.cars = s.cars.map((c) => ({
+      x: c.x,
+      y: c.y,
+      heading: c.heading,
+      speed: c.speed,
+      fuel: c.fuel,
+    }));
+  }
   g.driving = s.cars ? (s.driving ?? -1) : -1;
   g.stats = { ...s.stats };
   g.rng.state = s.rng;

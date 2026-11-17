@@ -83,7 +83,6 @@ describe('cars parked in the streets', () => {
       expect(validSpot(world, car.x, car.y, CAR.radius)).toBe(true);
       expect(car.fuel).toBeGreaterThanOrEqual(CAR.fuelFound[0]);
       expect(car.fuel).toBeLessThanOrEqual(CAR.fuelFound[1]);
-      expect(car.hp).toBe(CAR.hp);
       // along the road, at the kerb, facing the way of the kerb it is on (right-hand traffic)
       expect(Math.abs(Math.sin(car.heading))).toBeLessThan(1e-6);
       const roadY = Math.abs(car.y) < 200 ? 0 : -400;
@@ -171,7 +170,7 @@ describe('at the wheel', () => {
 
   it('is far slower off the road, and cannot be turned standing still', () => {
     const { g, world } = town(HOUSES, QUIET, 800, [road(-700, 700)]);
-    g.cars.push({ x: -300, y: -250, heading: 0, speed: 0, fuel: 1, hp: CAR.hp }); // on the grass
+    g.cars.push({ x: -300, y: -250, heading: 0, speed: 0, fuel: 1 }); // on the grass
     const car = g.cars.length - 1;
     getIn(g, world, car);
     const heading = g.cars[car].heading;
@@ -185,7 +184,7 @@ describe('at the wheel', () => {
 
   it('steers left with A and right with D while rolling, and S brakes, then backs up', () => {
     const { g, world } = town(HOUSES, QUIET, 800, [road(-700, 700)]);
-    g.cars.push({ x: -400, y: 0, heading: 0, speed: 0, fuel: 1, hp: CAR.hp });
+    g.cars.push({ x: -400, y: 0, heading: 0, speed: 0, fuel: 1 });
     const car = g.cars.length - 1;
     getIn(g, world, car);
     const c = g.cars[car];
@@ -211,7 +210,7 @@ describe('at the wheel', () => {
   it('is stopped by a wall, never crosses one, and a hard crash costs the car and the driver', () => {
     const wall: PlaceBuilding[] = [house(1, 60, -15, 30), ...HOUSES.slice(4)];
     const { g, world, colliders } = town(wall, QUIET, 800, [road(-700, 60)]);
-    g.cars.push({ x: -150, y: 0, heading: 0, speed: 0, fuel: 1, hp: CAR.hp });
+    g.cars.push({ x: -150, y: 0, heading: 0, speed: 0, fuel: 1 });
     const car = g.cars.length - 1;
     getIn(g, world, car);
     const events: GameEvent[] = [];
@@ -228,7 +227,6 @@ describe('at the wheel', () => {
     const crash = events.find((e) => e.type === 'car' && e.what === 'crash');
     expect(crash).toBeDefined();
     expect(crash && crash.type === 'car' && crash.force).toBeGreaterThan(CAR.hurtSpeed);
-    expect(g.cars[car].hp).toBeLessThan(CAR.hp);
     expect(g.health).toBeLessThan(100);
     expect(g.stats.damageTaken).toBeGreaterThan(0);
     // a loud bang: a noise the horde can hear
@@ -237,7 +235,7 @@ describe('at the wheel', () => {
 
   it('runs down whoever is in the road, and the car takes a knock for each', () => {
     const { g, world } = town(HOUSES, QUIET, 800, [road(-700, 700)]);
-    g.cars.push({ x: -300, y: 0, heading: 0, speed: 0, fuel: 1, hp: CAR.hp });
+    g.cars.push({ x: -300, y: 0, heading: 0, speed: 0, fuel: 1 });
     const car = g.cars.length - 1;
     getIn(g, world, car);
     for (let k = 0; k < 6; k++)
@@ -246,38 +244,42 @@ describe('at the wheel', () => {
     drive(g, world, 12, 1, 0, events);
     expect(g.stats.kills).toBeGreaterThanOrEqual(3);
     expect(events.some((e) => e.type === 'hit' && e.kill)).toBe(true);
-    expect(g.cars[car].hp).toBeLessThan(CAR.hp);
     expect(g.cars[car].x).toBeGreaterThan(-100); // it drove on through
     expect(g.health).toBe(100); // nobody laid a hand on the driver
   });
 
-  it('takes most of a blow for you, until it is wrecked', () => {
-    const { g, world } = town(HOUSES, QUIET, 800, [road(-700, 700)]);
-    g.cars.push({ x: -300, y: 0, heading: 0, speed: 0, fuel: 1, hp: CAR.hp });
-    const car = g.cars.length - 1;
-    getIn(g, world, car);
-    for (let k = 0; k < 2; k++) {
-      const a = (k / 2) * Math.PI * 2;
-      spawnZombie(g.horde, -300 + Math.cos(a) * 1.6, Math.sin(a) * 1.6, ZKind.WALKER, ZState.CHASE);
+  it('takes most of a blow for you, and never breaks', () => {
+    const onFoot = town(HOUSES, QUIET, 800, [road(-700, 700)]);
+    const inCar = town(HOUSES, QUIET, 800, [road(-700, 700)]);
+    inCar.g.cars.push({ x: -300, y: 0, heading: 0, speed: 0, fuel: 1 });
+    getIn(inCar.g, inCar.world, inCar.g.cars.length - 1);
+    onFoot.g.player = { ...onFoot.g.player, x: -300, y: 0 };
+    for (const { g } of [onFoot, inCar]) {
+      for (let k = 0; k < 2; k++) {
+        const a = (k / 2) * Math.PI * 2;
+        spawnZombie(
+          g.horde,
+          -300 + Math.cos(a) * 1.6,
+          Math.sin(a) * 1.6,
+          ZKind.WALKER,
+          ZState.CHASE,
+        );
+      }
     }
-    drive(g, world, 4, 0, 0);
-    const worn = CAR.hp - g.cars[car].hp;
-    expect(worn).toBeGreaterThan(0);
-    expect(worn).toBeLessThan(CAR.hp);
-    expect(g.stats.damageTaken).toBeGreaterThan(0);
-    expect(worn).toBeGreaterThan(g.stats.damageTaken * 2);
-    // once wrecked, everything lands on you
-    g.cars[car].hp = 0;
-    const before = g.stats.damageTaken;
-    drive(g, world, 6, 0, 0);
-    expect(g.stats.damageTaken - before).toBeGreaterThan(20);
-    drive(g, world, 3, 1, 0);
-    expect(g.cars[car].speed).toBe(0); // and it will not go
+    drive(onFoot.g, onFoot.world, 6, 0, 0);
+    drive(inCar.g, inCar.world, 6, 0, 0);
+    expect(inCar.g.stats.damageTaken).toBeGreaterThan(0);
+    expect(onFoot.g.stats.damageTaken).toBeGreaterThan(inCar.g.stats.damageTaken * 3);
+    // the car is as it was: it still goes, and still keeps them off
+    const car = inCar.g.cars[inCar.g.driving];
+    expect(car.fuel).toBe(1);
+    drive(inCar.g, inCar.world, 3, 1, 0);
+    expect(car.speed).toBeGreaterThan(5);
   });
 
   it('runs out of fuel, and an empty car goes nowhere', () => {
     const { g, world } = town(HOUSES, QUIET, 800, [road(-700, 700)]);
-    g.cars.push({ x: -300, y: 0, heading: 0, speed: 0, fuel: 0.004, hp: CAR.hp });
+    g.cars.push({ x: -300, y: 0, heading: 0, speed: 0, fuel: 0.004 });
     const car = g.cars.length - 1;
     getIn(g, world, car);
     const events: GameEvent[] = [];
@@ -293,7 +295,7 @@ describe('at the wheel', () => {
 
   it('is loud: the engine is a noise the horde hears, louder the faster you go', () => {
     const { g, world } = town(HOUSES, QUIET, 800, [road(-700, 700)]);
-    g.cars.push({ x: -300, y: 0, heading: 0, speed: 0, fuel: 1, hp: CAR.hp });
+    g.cars.push({ x: -300, y: 0, heading: 0, speed: 0, fuel: 1 });
     getIn(g, world, g.cars.length - 1);
     drive(g, world, 0.5, 1, 0);
     const slow = Math.max(...g.noises.map((n) => n.radius));
@@ -306,7 +308,7 @@ describe('at the wheel', () => {
 
   it('lets you out beside it, on open ground, and stays where you left it', () => {
     const { g, world } = town(HOUSES, QUIET, 800, [road(-700, 700)]);
-    g.cars.push({ x: -300, y: 0, heading: 0, speed: 0, fuel: 1, hp: CAR.hp });
+    g.cars.push({ x: -300, y: 0, heading: 0, speed: 0, fuel: 1 });
     const car = g.cars.length - 1;
     getIn(g, world, car);
     drive(g, world, 3, 1, 0);
@@ -331,7 +333,7 @@ describe('at the wheel', () => {
     const { g, world } = town(HOUSES, { ...QUIET, population: true, clumps: 4 }, 800, [
       road(-700, 700),
     ]);
-    g.cars.push({ x: -300, y: 0, heading: 0, speed: 0, fuel: 0.6, hp: 70 });
+    g.cars.push({ x: -300, y: 0, heading: 0, speed: 0, fuel: 0.6 });
     const car = g.cars.length - 1;
     getIn(g, world, car);
     drive(g, world, 3, 1, 0.2);
@@ -407,7 +409,7 @@ describe('cars and the window of a big city', () => {
   it('carries the cars the next window holds, the one you drive first of all, and parks new ones only on new ground', () => {
     const a = windowWorld([0, 0], 800);
     const ga = createGame(a, OPTIONS);
-    ga.cars.push({ x: 350, y: 0, heading: 0, speed: 0, fuel: 0.5, hp: 80 });
+    ga.cars.push({ x: 350, y: 0, heading: 0, speed: 0, fuel: 0.5 });
     const mine = ga.cars.length - 1;
     getIn(ga, a, mine);
     drive(ga, a, 2, 1, 0);
@@ -422,7 +424,6 @@ describe('cars and the window of a big city', () => {
     const now = gb.cars[gb.driving];
     expect(now.x).toBeCloseTo(driven.x - 400, 6);
     expect(now.fuel).toBe(driven.fuel);
-    expect(now.hp).toBe(80);
     expect(gb.player.x).toBe(now.x);
     // every old car the new window holds is there, where it was; none the window does not hold
     const inside = carsBefore.filter((c) => Math.abs(c.x - 400) <= 800 - 6);
@@ -451,9 +452,10 @@ describe('the car on its own', () => {
       waterways: [],
       roads: [],
     });
-    const car: Car = { x: 1, y: 2, heading: 0.3, speed: 0, fuel: 1, hp: CAR.hp };
+    const car: Car = { x: 1, y: 2, heading: 0.3, speed: 0, fuel: 1 };
     const r = stepCar(car, { throttle: 0, steer: 0 }, colliders, DT);
-    expect(car).toEqual({ x: 1, y: 2, heading: 0.3, speed: 0, fuel: 1, hp: CAR.hp });
+    expect(car).toEqual({ x: 1, y: 2, heading: 0.3, speed: 0, fuel: 1 });
+    expect(Object.keys(car).sort()).toEqual(['fuel', 'heading', 'speed', 'x', 'y']);
     expect(r).toEqual({ crash: 0, running: false });
   });
 });

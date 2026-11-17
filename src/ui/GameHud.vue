@@ -131,16 +131,6 @@ function push(n: GameNotice): void {
         };
         announcement.value = 'The car is out of fuel.';
         later(() => banner.value?.id === id && (banner.value = null), 4500);
-      } else if (n.what === 'wrecked') {
-        banner.value = {
-          id,
-          tone: 'danger',
-          title: 'The car is wrecked',
-          sub: 'It will not go, and it will not keep them out. Get out.',
-          angle: null,
-        };
-        announcement.value = 'The car is wrecked. Get out.';
-        later(() => banner.value?.id === id && (banner.value = null), 5000);
       }
       break;
     case 'restart':
