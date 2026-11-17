@@ -128,6 +128,11 @@ drop into that place; in the city, zoom out as far as the camera goes (1.8 km up
 you are back on the globe over it. (It is a hand-off, not one continuous zoom: the globe and the city
 are two different pictures.)
 
+**Leaving does not end the game.** Go back to the globe (the button, the pause menu, or zooming out)
+and the city you were in stays as it was, asleep: its card says how long you have lasted and offers
+**Continue**, and you come back to the pause menu, with the horde exactly where it stood. One city is
+kept at a time; opening another place, or going back after you died, starts fresh.
+
 **A place falls when you die in it.** Its pin turns into a red cross, and with the **Lights** layer on, a
 patch of darkness spreads over its glow on the globe. It stays dark, with the longest you lasted, until
 you **Try again** there (which lights it up for the new game). What happened is kept in this browser
@@ -211,7 +216,9 @@ behind a door works, but it does not win the game.
   ground show how far each sound went. Gunfire also sends the people in the street running.
 - **Speed matters.** You walk at 3.4 m/s and sprint at 7.6 for about fourteen seconds; the stamina bar
   refills after a pause. Walkers (2.3 m/s) are slower than you walking; runners (5.2) are faster than
-  a walk but slower than a sprint. Zombies hanging on slow you down.
+  a walk but slower than a sprint; at night both are a quarter faster. The people of the city stroll at
+  about 1.25 and run at about 4.1, so a walker never catches them in the open and a runner always does.
+  Zombies hanging on slow you down, and they never stand in each other's space: a crowd spreads out.
 
 **Staying fed.** Hunger drains steadily; at zero you starve and nothing heals. Food crates and first aid
 lie about the streets, shops and clinics have more, and kills sometimes drop some.

@@ -345,6 +345,11 @@ export interface CityScene {
   /** Stop or resume the game. The picture keeps drawing; nothing in the game moves. */
   setPaused(paused: boolean): void;
   togglePause(): void;
+  /**
+   * Put the scene to sleep (nothing is drawn, stepped or listened to) while the globe is showing, and
+   * wake it again. It wakes paused, with the pause menu up, so the horde does not get a free bite.
+   */
+  setSleeping(on: boolean): void;
   debug?: CityDebug;
   destroy(): void;
 }
@@ -829,8 +834,11 @@ export async function createCityScene(
   let weaponQueued: 0 | 1 | 2 = 0;
   let triggerHeld = false;
   let paused = false;
+  // Asleep: the scene is kept but neither drawn nor stepped nor listening (the globe is showing).
+  let sleeping = false;
   let aimScreen: { x: number; y: number } | null = null;
   const onKeyDown = (e: KeyboardEvent): void => {
+    if (sleeping) return;
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     const k = e.key.toLowerCase();
     if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -1093,7 +1101,7 @@ export async function createCityScene(
   const SHADOW_STEP = 1.08;
 
   function frame(now: number): void {
-    if (destroyed) return;
+    if (destroyed || sleeping) return; // asleep: the loop stops here and is started again on waking
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
 
@@ -1438,6 +1446,19 @@ export async function createCityScene(
     },
     togglePause() {
       paused = !paused && game.status === 'playing';
+    },
+    setSleeping(on) {
+      if (on === sleeping) return;
+      sleeping = on;
+      if (on) {
+        keys.clear();
+        triggerHeld = false;
+        paused = game.status === 'playing'; // and it stays paused on waking, until you say otherwise
+      } else {
+        cancelAnimationFrame(frameId);
+        last = performance.now();
+        frameId = requestAnimationFrame(frame);
+      }
     },
     debug: options.debug
       ? {

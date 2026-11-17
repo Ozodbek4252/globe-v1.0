@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { markRaw, onBeforeUnmount, onMounted, ref, shallowRef, useTemplateRef } from 'vue';
+import { markRaw, onBeforeUnmount, onMounted, ref, shallowRef, useTemplateRef, watch } from 'vue';
 import type {
   CameraMode,
   CityScene,
@@ -13,8 +13,19 @@ import type {
 import GameHud from './GameHud.vue';
 import RadarScope from './RadarScope.vue';
 
-const props = defineProps<{ cityId: string; title: string; density?: number }>();
-const emit = defineEmits<{ close: []; over: [seconds: number]; zoomOut: [] }>();
+/** `active` false puts the scene to sleep (the globe is showing); it wakes paused when true again. */
+const props = withDefaults(
+  defineProps<{ cityId: string; title: string; density?: number; active?: boolean }>(),
+  { active: true, density: undefined },
+);
+const emit = defineEmits<{
+  close: [];
+  over: [seconds: number];
+  zoomOut: [];
+  /** The seconds survived so far (once a second), and a new game begun in place. */
+  time: [seconds: number];
+  restarted: [];
+}>();
 
 const host = useTemplateRef<HTMLElement>('host');
 const root = useTemplateRef<HTMLElement>('root');
@@ -106,6 +117,7 @@ function onTime(): void {
 }
 
 function onKey(e: KeyboardEvent): void {
+  if (!props.active) return; // asleep behind the globe
   if (e.key === 'Escape') {
     e.preventDefault();
     // Esc opens the pause menu while playing (and closes it); once the game is over it leaves
@@ -120,6 +132,17 @@ function onKey(e: KeyboardEvent): void {
 function setPaused(paused: boolean): void {
   scene?.setPaused(paused);
 }
+
+let wholeSeconds = -1;
+
+// asleep while the globe is showing; awake (and paused) again when it is not
+watch(
+  () => props.active,
+  (active) => {
+    scene?.setSleeping(!active);
+    if (active) root.value?.focus();
+  },
+);
 
 onMounted(async () => {
   window.addEventListener('keydown', onKey);
@@ -157,6 +180,10 @@ onMounted(async () => {
     stopStats = created.onStats((s) => (stats.value = s));
     stopPlayer = created.onPlayer((s) => {
       player.value = s;
+      if (Math.floor(s.time) !== wholeSeconds) {
+        wholeSeconds = Math.floor(s.time);
+        emit('time', s.time);
+      }
       // the clock shows the game's time (which moves by itself, or where the slider put it)
       hour.value = s.hour;
       sunElevation.value = Math.round(created.sunElevation());
@@ -164,11 +191,13 @@ onMounted(async () => {
     stopGame = created.onGame((n) => {
       hud.value?.push(n);
       if (n.type === 'over') emit('over', n.time);
+      if (n.type === 'restart') emit('restarted');
     });
     stopRadar = created.onRadar((f) => {
       radar.value = f;
     });
     stopZoom = created.onZoomOut(() => emit('zoomOut'));
+    if (!props.active) created.setSleeping(true);
     ready.value = true;
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'The city could not be loaded.';

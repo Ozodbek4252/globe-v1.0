@@ -653,3 +653,18 @@ describe('the dead at night', () => {
     expect(roused(1)).not.toBe(ZState.WANDER); // roused, and on its way
   });
 });
+
+describe('far from the survivor', () => {
+  it('zombies still keep apart, and still rouse each other', () => {
+    const { run } = arena();
+    const h = createHorde(6, 1);
+    // a knot of four on the same spot, 200 m from the survivor
+    for (let k = 0; k < 4; k++) spawnZombie(h, 100, 100, ZKind.WALKER, ZState.CHASE);
+    run(h, -100, -100, 2);
+    for (let a = 0; a < 4; a++) {
+      for (let b = a + 1; b < 4; b++) {
+        expect(Math.hypot(h.x[a] - h.x[b], h.y[a] - h.y[b])).toBeGreaterThan(0.5);
+      }
+    }
+  });
+});

@@ -69,9 +69,8 @@ export const ZOMBIE = {
   linger: 6,
   /** Beyond this the horde is simulated coarsely: every fourth step with a four times longer step. */
   farRange: 130,
-  /** Zombies are kept from stacking within this window around the survivor. */
-  windowRadius: 96,
-  cell: 4,
+  /** The grid zombies are kept apart with (and rouse each other through) covers the whole map in cells this wide. */
+  cell: 6,
   /** How quickly velocity follows the wish (per second) and how fast a zombie turns (radians/s). */
   accel: 7,
   turnRate: 9,
@@ -192,7 +191,10 @@ export interface HordeContext {
 }
 
 interface HordeGrid {
+  /** The most cells per side (the whole map), and how many are in use this step (the zombies' box). */
   side: number;
+  cols: number;
+  rows: number;
   originX: number;
   originY: number;
   start: Int32Array;
@@ -252,8 +254,10 @@ export interface Horde {
   pushed: Uint8Array;
 }
 
-export function createHorde(capacity: number, seed: number): Horde {
-  const side = Math.ceil((ZOMBIE.windowRadius * 2) / ZOMBIE.cell);
+/** @param half the map spans -half to +half (the grid of neighbours covers it) */
+export function createHorde(capacity: number, seed: number, half = 1100): Horde {
+  const reach = half + ZOMBIE.cell;
+  const side = Math.ceil((reach * 2) / ZOMBIE.cell);
   return {
     capacity,
     used: 0,
@@ -282,8 +286,10 @@ export function createHorde(capacity: number, seed: number): Horde {
     rng: createRng(seed),
     grid: {
       side,
-      originX: 0,
-      originY: 0,
+      cols: 0,
+      rows: 0,
+      originX: -reach,
+      originY: -reach,
       start: new Int32Array(side * side + 1),
       items: new Int32Array(capacity),
       fill: new Int32Array(side * side),
@@ -434,7 +440,7 @@ export function stepHorde(h: Horde, ctx: HordeContext, dt: number, tick: number)
   h.damage = 0;
   h.doorDamage = 0;
   h.engaged = 0;
-  buildGrid(h, ctx.px, ctx.py);
+  buildGrid(h);
   if (ctx.targets) rebuildTargets(ctx.targets);
   const far2 = ZOMBIE.farRange * ZOMBIE.farRange;
   for (let i = 0; i < h.used; i++) {
@@ -454,28 +460,51 @@ export function stepHorde(h: Horde, ctx: HordeContext, dt: number, tick: number)
     if ((i + tick) % ZOMBIE.perceptionEvery === 0) perceive(h, i, ctx, d2, step);
     act(h, i, ctx, d2, step);
   }
-  separate(h, ctx);
+  separate(h, ctx, tick);
   return h.damage;
 }
 
-function buildGrid(h: Horde, px: number, py: number): void {
+function buildGrid(h: Horde): void {
   const g = h.grid;
   const cell = ZOMBIE.cell;
-  g.originX = Math.floor(px / cell) * cell - (g.side / 2) * cell;
-  g.originY = Math.floor(py / cell) * cell - (g.side / 2) * cell;
-  g.start.fill(0);
+  // the grid covers the box the standing zombies are in: a block or two early on, never more than the
+  // map, so the work of clearing and counting it stays in step with the horde
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < h.used; i++) {
+    if (h.state[i] >= ZState.DEAD) continue;
+    const x = h.x[i];
+    const y = h.y[i];
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  if (minX > maxX) {
+    g.cols = g.rows = 0;
+    g.cellOf.fill(-1, 0, h.used);
+    return;
+  }
+  g.originX = Math.floor(minX / cell) * cell;
+  g.originY = Math.floor(minY / cell) * cell;
+  g.cols = Math.min(g.side, Math.floor((maxX - g.originX) / cell) + 1);
+  g.rows = Math.min(g.side, Math.floor((maxY - g.originY) / cell) + 1);
+  const cells = g.cols * g.rows;
+  g.start.fill(0, 0, cells + 1);
   for (let i = 0; i < h.used; i++) {
     g.cellOf[i] = -1;
     if (h.state[i] >= ZState.DEAD) continue;
     const cx = Math.floor((h.x[i] - g.originX) / cell);
     const cy = Math.floor((h.y[i] - g.originY) / cell);
-    if (cx < 0 || cy < 0 || cx >= g.side || cy >= g.side) continue;
-    const c = cy * g.side + cx;
+    if (cx < 0 || cy < 0 || cx >= g.cols || cy >= g.rows) continue;
+    const c = cy * g.cols + cx;
     g.cellOf[i] = c;
     g.start[c + 1]++;
   }
-  for (let c = 0; c < g.side * g.side; c++) g.start[c + 1] += g.start[c];
-  g.fill.set(g.start.subarray(0, g.side * g.side));
+  for (let c = 0; c < cells; c++) g.start[c + 1] += g.start[c];
+  g.fill.set(g.start.subarray(0, cells));
   for (let i = 0; i < h.used; i++) {
     const c = g.cellOf[i];
     if (c >= 0) g.items[g.fill[c]++] = i;
@@ -600,14 +629,14 @@ function rouse(h: Horde, i: number, ctx: HordeContext): void {
   const g = h.grid;
   const c = g.cellOf[i];
   if (c < 0) return;
-  const cx = c % g.side;
-  const cy = (c - cx) / g.side;
+  const cx = c % g.cols;
+  const cy = (c - cx) / g.cols;
   const radius = ZOMBIE.alertRadius * (1 + NIGHT.alert * (ctx.night ?? 0));
   const r2 = radius * radius;
   const span = Math.ceil(radius / ZOMBIE.cell); // cells to look in, each way
-  for (let gy = Math.max(0, cy - span); gy <= Math.min(g.side - 1, cy + span); gy++) {
-    for (let gx = Math.max(0, cx - span); gx <= Math.min(g.side - 1, cx + span); gx++) {
-      const cell = gy * g.side + gx;
+  for (let gy = Math.max(0, cy - span); gy <= Math.min(g.rows - 1, cy + span); gy++) {
+    for (let gx = Math.max(0, cx - span); gx <= Math.min(g.cols - 1, cx + span); gx++) {
+      const cell = gy * g.cols + gx;
       for (let k = g.start[cell]; k < g.start[cell + 1]; k++) {
         const j = g.items[k];
         if (j === i || h.state[j] !== ZState.WANDER) continue;
@@ -913,8 +942,9 @@ function attack(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number):
   }
 }
 
-/** Keep zombies from stacking on each other (and on the survivor), near the survivor only. */
-function separate(h: Horde, ctx: HordeContext): void {
+/** Keep zombies from stacking on each other (and on the survivor), wherever they are. */
+function separate(h: Horde, ctx: HordeContext, tick: number): void {
+  const far2 = ZOMBIE.farRange * ZOMBIE.farRange;
   const g = h.grid;
   const minDist = ZOMBIE.radius * 1.75;
   const min2 = minDist * minDist;
@@ -923,11 +953,17 @@ function separate(h: Horde, ctx: HordeContext): void {
   for (let i = 0; i < h.used; i++) {
     const c = g.cellOf[i];
     if (c < 0 || h.state[i] >= ZState.DEAD) continue;
-    const cx = c % g.side;
-    const cy = (c - cx) / g.side;
-    for (let gy = Math.max(0, cy - 1); gy <= Math.min(g.side - 1, cy + 1); gy++) {
-      for (let gx = Math.max(0, cx - 1); gx <= Math.min(g.side - 1, cx + 1); gx++) {
-        const cell = gy * g.side + gx;
+    // far from the survivor they only move every fourth step, so that is often enough to keep them apart
+    if ((i + tick) & 3) {
+      const dx = h.x[i] - ctx.px;
+      const dy = h.y[i] - ctx.py;
+      if (dx * dx + dy * dy > far2) continue;
+    }
+    const cx = c % g.cols;
+    const cy = (c - cx) / g.cols;
+    for (let gy = Math.max(0, cy - 1); gy <= Math.min(g.rows - 1, cy + 1); gy++) {
+      for (let gx = Math.max(0, cx - 1); gx <= Math.min(g.cols - 1, cx + 1); gx++) {
+        const cell = gy * g.cols + gx;
         for (let k = g.start[cell]; k < g.start[cell + 1]; k++) {
           const j = g.items[k];
           if (j <= i || h.state[j] >= ZState.DEAD) continue;

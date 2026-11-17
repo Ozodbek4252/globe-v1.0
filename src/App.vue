@@ -59,32 +59,50 @@ const playCard = useTemplateRef<{ focus: () => void }>('playCard');
 
 /** What the list says under a place's name: where it is, and how it went. */
 function remark(id: string, country: string): string {
+  const going = inPlay(id);
+  if (going !== null) return `${country} · in play · ${fmtClock(going)}`;
   const outcome = play.outcomes.value[id];
   if (!outcome) return country;
   return `${country} · best ${fmtClock(outcome.best)}${outcome.fallen ? ' · fallen' : ''}`;
 }
 
 // The 3D city covers the whole window. `#city=<id>` in the address opens it directly (`#city` alone
-// is Tashkent, the first place there was).
-const cityId = ref<string | null>(null);
-const cityPlace = computed(() => play.places.value.find((p) => p.id === cityId.value) ?? null);
+// is Tashkent, the first place there was). Leaving for the globe does not end the game: the one city
+// you were in stays alive, asleep, and going back to it continues where you left off (paused). Only
+// opening another place, or a game that is over, lets it go.
+const mountedId = ref<string | null>(null); // the city that exists
+const cityId = ref<string | null>(null); // the city that is showing (null: the globe)
+const cityOver = ref(false);
+const cityTime = ref(0);
+const cityPlace = computed(() => play.places.value.find((p) => p.id === mountedId.value) ?? null);
+/** Seconds survived in a game that is still going at this place, or null if there is none. */
+const inPlay = (id: string): number | null =>
+  mountedId.value === id && !cityOver.value && cityTime.value > 0 ? cityTime.value : null;
 const setHash = (hash: string): void =>
   history.replaceState(null, '', location.pathname + location.search + hash);
 
 function openCity(id: string): void {
-  // playing a fallen place again lights it up: the lights come on when you try again
-  if (play.outcomes.value[id]?.fallen) play.reclaim(id);
+  if (mountedId.value !== id || cityOver.value) {
+    // a new game: playing a fallen place again lights it up
+    if (play.outcomes.value[id]?.fallen) play.reclaim(id);
+    mountedId.value = id;
+    cityOver.value = false;
+    cityTime.value = 0;
+  }
   cityId.value = id;
   setHash(cityHash(id));
 }
 async function closeCity(): Promise<void> {
   cityId.value = null;
+  if (cityOver.value) mountedId.value = null; // nothing to come back to
   setHash('');
   await nextTick();
   playCard.value?.focus();
 }
 const syncFromHash = (): void => {
-  cityId.value = parseCityHash(location.hash);
+  const id = parseCityHash(location.hash);
+  if (id) openCity(id);
+  else void closeCity();
 };
 watch(cityId, (id) => g.setPaused(id !== null), { immediate: true });
 onMounted(() => {
@@ -157,6 +175,7 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', syncFromHash));
         ref="playCard"
         :place="play.chosen.value"
         :outcome="play.chosen.value ? play.outcomes.value[play.chosen.value.id] : undefined"
+        :in-play="play.chosen.value ? inPlay(play.chosen.value.id) : null"
         @play="play.chosen.value && openCity(play.chosen.value.id)"
         @close="play.choose(null)"
       />
@@ -165,14 +184,26 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', syncFromHash));
   </div>
   <HoverTip :tip="g.tip.value" />
   <CityView
-    v-if="cityId && play.loaded.value"
-    :key="cityId"
-    :city-id="cityId"
-    :title="cityPlace?.name ?? cityId"
+    v-if="mountedId && play.loaded.value"
+    v-show="cityId === mountedId"
+    :key="mountedId"
+    :city-id="mountedId"
+    :title="cityPlace?.name ?? mountedId"
     :density="cityPlace?.density"
+    :active="cityId === mountedId"
     @close="closeCity"
     @zoom-out="zoomedOut"
-    @over="(seconds) => play.died(cityId as string, seconds)"
+    @time="(seconds) => (cityTime = seconds)"
+    @restarted="
+      cityOver = false;
+      cityTime = 0;
+    "
+    @over="
+      (seconds) => {
+        play.died(mountedId as string, seconds);
+        cityOver = true;
+      }
+    "
   />
 </template>
 

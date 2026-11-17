@@ -3,7 +3,12 @@ import { computed, useTemplateRef } from 'vue';
 import { fmtClock } from '../lib/format';
 import type { Outcome, Playable } from '../map/playable';
 
-const props = defineProps<{ place: Playable | null; outcome: Outcome | undefined }>();
+/** `inPlay`: seconds survived in a game still going at this place (it can be continued), or null. */
+const props = defineProps<{
+  place: Playable | null;
+  outcome: Outcome | undefined;
+  inPlay?: number | null;
+}>();
 defineEmits<{ play: []; close: [] }>();
 
 const playButton = useTemplateRef<HTMLButtonElement>('playButton');
@@ -36,6 +41,10 @@ const people = computed(() =>
     <dl>
       <dt>People</dt>
       <dd>{{ people }} per km²</dd>
+      <template v-if="inPlay !== null && inPlay !== undefined">
+        <dt>Now</dt>
+        <dd class="going">in play · {{ fmtClock(inPlay) }}</dd>
+      </template>
       <dt>Best</dt>
       <dd>{{ outcome ? fmtClock(outcome.best) : 'not played yet' }}</dd>
       <template v-if="outcome">
@@ -44,7 +53,9 @@ const people = computed(() =>
       </template>
     </dl>
     <button id="enter-city" ref="playButton" class="enter" type="button" @click="$emit('play')">
-      <span>{{ fallen ? 'Try again' : 'Play here' }}</span>
+      <span>{{
+        inPlay !== null && inPlay !== undefined ? 'Continue' : fallen ? 'Try again' : 'Play here'
+      }}</span>
       <small>A real map from OpenStreetMap. Stay alive as long as you can.</small>
     </button>
   </div>
@@ -62,6 +73,9 @@ const people = computed(() =>
   color: var(--muted);
   font-size: 13.5px;
   line-height: 1.4;
+}
+.play-card dd.going {
+  color: #ffd27a;
 }
 .play-card dd.lost {
   color: #ff8b7d;

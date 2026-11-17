@@ -457,7 +457,11 @@ export function createGame(world: GameWorld, options: GameOptions): GameState {
     GAME.shelter.door,
     (options.density ?? GAME.outbreak.density) * km2,
   );
-  const horde = createHorde(options.capacity ?? GAME.capacity, (options.seed * 2654435761) >>> 0);
+  const horde = createHorde(
+    options.capacity ?? GAME.capacity,
+    (options.seed * 2654435761) >>> 0,
+    half,
+  );
   const humans = createHumans(withPeople ? GAME.streetPeople : 0, (options.seed * 40503 + 7) >>> 0);
   const zombieIndex = createPointIndex(half, 10, horde.capacity);
   const doorIndex = createPointIndex(half, 16, Math.max(1, outbreak.count));
