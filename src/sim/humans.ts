@@ -36,8 +36,8 @@ export const HUMAN = {
   /** How slowly the bitten stagger, and how long before they turn. */
   bitten: 0.6,
   incubation: 7,
-  /** How far they notice a zombie (with a clear line, or at once when it is very close). */
-  sight: 15,
+  /** How far they notice a zombie (with a clear line, or at once when it is very close): a street away. */
+  sight: 40,
   /** How long a scare lasts, after the last sign of danger. */
   scare: 4.5,
   /** Beyond this from the survivor they are simulated coarsely: every fourth step with a four times longer step. */
@@ -174,6 +174,8 @@ const scan = {
 function visitZombie(z: number, d2: number): void {
   const ctx = scan.ctx;
   if (!ctx || !isAlive(ctx.horde, z)) return;
+  // a handful in sight is reason enough to run: no need to check the line to a whole horde
+  if (scan.threats >= 6) return;
   // close by, they know at once; farther off they need a clear line
   if (d2 > 25 && !lineOfSight(ctx.colliders, scan.x, scan.y, ctx.horde.x[z], ctx.horde.y[z]))
     return;

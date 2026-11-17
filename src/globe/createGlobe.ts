@@ -111,6 +111,8 @@ export function createGlobe(host: HTMLElement, options: GlobeOptions): GlobeApi 
 
   const hoverEvents = createEmitter<HoverInfo | null>();
   const markerEvents = createEmitter<string>();
+  const zoomInEvents = createEmitter<string>();
+  let wheeledIn = 0;
   const picksEvents = createEmitter<PicksState>();
   const viewEvents = createEmitter<ViewInfo>();
   const lightsStatusEvents = createEmitter<string>();
@@ -331,6 +333,18 @@ export function createGlobe(host: HTMLElement, options: GlobeOptions): GlobeApi 
       toggle(countryAt(x, y, hitContext()));
     },
     escape: clearPicks,
+    zoomPastMax() {
+      // a few notches past the closest the globe goes, over a pin: into that place
+      const pin = markerAt(proj, state.rot, markers, state.width / 2, state.height / 2, 90);
+      if (!pin) {
+        wheeledIn = 0;
+        return;
+      }
+      if (++wheeledIn >= 3) {
+        wheeledIn = 0;
+        zoomInEvents.emit(pin.id);
+      }
+    },
   });
 
   resize();
@@ -397,6 +411,7 @@ export function createGlobe(host: HTMLElement, options: GlobeOptions): GlobeApi 
 
     onHover: hoverEvents.on,
     onMarkerClick: markerEvents.on,
+    onZoomIntoMarker: zoomInEvents.on,
     onPicksChange: picksEvents.on,
     onViewChange: viewEvents.on,
     onLightsStatus: lightsStatusEvents.on,
@@ -409,6 +424,7 @@ export function createGlobe(host: HTMLElement, options: GlobeOptions): GlobeApi 
       lights?.dispose();
       hoverEvents.clear();
       markerEvents.clear();
+      zoomInEvents.clear();
       picksEvents.clear();
       viewEvents.clear();
       lightsStatusEvents.clear();

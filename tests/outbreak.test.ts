@@ -268,3 +268,39 @@ describe('sending people hunting', () => {
     expect(g.stats.damageTaken).toBeGreaterThan(0);
   });
 });
+
+describe('the turned, coming out', () => {
+  it('set off down the street instead of crowding the door they came out of', () => {
+    const { g, run } = town(NEIGHBOURHOOD, { patients: 1 });
+    for (let s = 0; s < 60 * 120 && g.horde.alive === 0; s++) run(DT);
+    expect(g.horde.alive).toBeGreaterThan(0);
+    // the moment they are out, each has somewhere to go, 20 to 45 m off (one step's walk at most since)
+    for (let i = 0; i < g.horde.used; i++) {
+      if (g.horde.state[i] >= ZState.DEAD) continue;
+      expect(g.horde.state[i]).toBe(ZState.INVESTIGATE);
+      const d = Math.hypot(g.horde.tx[i] - g.horde.x[i], g.horde.ty[i] - g.horde.y[i]);
+      expect(d).toBeGreaterThan(19);
+      expect(d).toBeLessThan(46);
+    }
+  });
+});
+
+describe('a person and a zombie in the same street', () => {
+  it('the person runs when the zombie is still a street away, and the zombie comes after them', () => {
+    const { g, run } = town([house(1, 300, 300)]);
+    emptyStreets(g);
+    const i = spawnHuman(g.humans, 0, 0, HState.WALK);
+    g.humans.timer[i] = 1000; // standing about
+    const z = spawnZombie(g.horde, 28, 0, ZKind.WALKER, ZState.WANDER);
+    g.horde.heading[z] = Math.PI; // facing them, 28 m off
+    g.horde.timer[z] = 1000;
+    g.player = { ...g.player, x: -300, y: -300 }; // the survivor is nowhere near
+    run(1);
+    expect(g.humans.state[i]).toBe(HState.FLEE);
+    expect(g.humans.x[i]).toBeLessThan(0); // away from it
+    expect(g.horde.state[z]).toBe(ZState.CHASE);
+    expect(g.horde.victim[z]).toBe(i);
+    run(3);
+    expect(g.horde.x[z]).toBeLessThan(26); // and it is coming
+  });
+});

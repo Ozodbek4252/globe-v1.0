@@ -14,7 +14,7 @@ import GameHud from './GameHud.vue';
 import RadarScope from './RadarScope.vue';
 
 const props = defineProps<{ cityId: string; title: string; density?: number }>();
-const emit = defineEmits<{ close: []; over: [seconds: number] }>();
+const emit = defineEmits<{ close: []; over: [seconds: number]; zoomOut: [] }>();
 
 const host = useTemplateRef<HTMLElement>('host');
 const root = useTemplateRef<HTMLElement>('root');
@@ -41,6 +41,7 @@ let stopStats: (() => void) | null = null;
 let stopPlayer: (() => void) | null = null;
 let stopGame: (() => void) | null = null;
 let stopRadar: (() => void) | null = null;
+let stopZoom: (() => void) | null = null;
 
 /**
  * Optional deep link, handy for sharing a spot or reproducing a screenshot. Metres are east/north of
@@ -167,6 +168,7 @@ onMounted(async () => {
     stopRadar = created.onRadar((f) => {
       radar.value = f;
     });
+    stopZoom = created.onZoomOut(() => emit('zoomOut'));
     ready.value = true;
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'The city could not be loaded.';
@@ -184,6 +186,7 @@ onBeforeUnmount(() => {
   stopPlayer?.();
   stopGame?.();
   stopRadar?.();
+  stopZoom?.();
   scene?.destroy();
   scene = null;
   delete (window as unknown as { __city?: CityScene }).__city;

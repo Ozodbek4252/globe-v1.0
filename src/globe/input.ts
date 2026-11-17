@@ -1,6 +1,6 @@
 import { clampLat } from '../lib/geo';
 import { setZoom, type GlobeState } from './state';
-import type { Rotation } from './projection';
+import { MAX_ZOOM, type Rotation } from './projection';
 
 /** What the input layer reports upward; everything else it does directly on the shared state. */
 export interface InputCallbacks {
@@ -14,6 +14,8 @@ export interface InputCallbacks {
   click(x: number, y: number): void;
   /** Escape was pressed on the canvas. */
   escape(): void;
+  /** The wheel zoomed in while the globe was already as close as it goes. */
+  zoomPastMax?(): void;
 }
 
 interface Drag {
@@ -129,7 +131,10 @@ export function attachInput(
 
   function onWheel(e: WheelEvent): void {
     e.preventDefault();
+    const zoomingIn = e.deltaY < 0;
+    const alreadyAtMax = state.zoom >= MAX_ZOOM - 1e-9;
     setZoom(state, state.zoom * Math.exp(-e.deltaY * 0.0015));
+    if (zoomingIn && alreadyAtMax) callbacks.zoomPastMax?.();
   }
 
   function onKeyDown(e: KeyboardEvent): void {

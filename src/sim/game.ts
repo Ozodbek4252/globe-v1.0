@@ -899,7 +899,22 @@ function emitZombies(g: GameState, world: GameWorld, b: number, n: number): numb
     const spot = streetSpot(g, world, o.doorX[b], o.doorY[b]);
     if (!spot) break;
     const kind = nextFloat(g.rng) < GAME.outbreak.runners ? ZKind.RUNNER : ZKind.WALKER;
-    if (spawnZombie(g.horde, spot[0], spot[1], kind, ZState.WANDER) < 0) break;
+    const i = spawnZombie(g.horde, spot[0], spot[1], kind, ZState.WANDER);
+    if (i < 0) break;
+    // the newly turned drift off down the street rather than crowding the door they came out of, so the
+    // outbreak spreads through the district instead of piling up in one block
+    for (let tries = 0; tries < 6; tries++) {
+      const a = nextFloat(g.rng) * Math.PI * 2;
+      const r = nextRange(g.rng, 20, 45);
+      const x = spot[0] + Math.cos(a) * r;
+      const y = spot[1] + Math.sin(a) * r;
+      if (!validSpot(world, x, y, 0.6)) continue;
+      g.horde.state[i] = ZState.INVESTIGATE;
+      g.horde.tx[i] = x;
+      g.horde.ty[i] = y;
+      g.horde.timer[i] = 0;
+      break;
+    }
     placed++;
   }
   return placed;

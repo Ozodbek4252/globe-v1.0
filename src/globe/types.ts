@@ -86,6 +86,8 @@ export interface GlobeApi {
   flyToPoint(lat: number, lon: number, zoom?: number): void;
   /** The id of the marker that was clicked. */
   onMarkerClick(listener: (id: string) => void): Unsubscribe;
+  /** The id of the marker the view zoomed into: it was in the middle, as close as the globe goes, and the wheel kept going. */
+  onZoomIntoMarker(listener: (id: string) => void): Unsubscribe;
 
   /** The country under the pointer, or null. Fires on every mouse move over the globe. */
   onHover(listener: (hover: HoverInfo | null) => void): Unsubscribe;

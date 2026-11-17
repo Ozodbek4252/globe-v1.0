@@ -59,7 +59,9 @@ export const ZOMBIE = {
   /** A chasing zombie rouses others this close. */
   alertRadius: 9,
   /** How far it sees a target in the open (with a clear line), and how far it notices one while chasing. */
-  targetSight: 16,
+  targetSight: 30,
+  /** It stays on a target until the target is this far off (further than it first saw them from), or gone. */
+  targetKeep: 40,
   targetNear: 5,
   /** Each zombie thinks (senses) once every this many steps, staggered across the horde. */
   perceptionEvery: 12,
@@ -518,7 +520,7 @@ function perceive(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number
     const stillThere =
       targets !== undefined &&
       targets.active[victim] === 1 &&
-      (targets.x[victim] - x) ** 2 + (targets.y[victim] - y) ** 2 < 22 * 22;
+      (targets.x[victim] - x) ** 2 + (targets.y[victim] - y) ** 2 < ZOMBIE.targetKeep ** 2;
     if (stillThere && !(aware && d < ZOMBIE.targetNear)) return;
     if (stillThere) h.victim[i] = -1;
     else {

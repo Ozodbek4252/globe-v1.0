@@ -42,6 +42,19 @@ function choose(id: string | null): void {
 const stopPinClicks = g.onMarkerClick(choose);
 onBeforeUnmount(stopPinClicks);
 
+// The wheel joins the two views: zoom into a pin as far as the globe goes and you drop into the
+// place; zoom out of a place as far as the city goes and you are back over it on the globe.
+const stopZoomIns = g.onZoomIntoMarker((id) => {
+  play.choose(id);
+  openCity(id);
+});
+onBeforeUnmount(stopZoomIns);
+async function zoomedOut(): Promise<void> {
+  const place = cityPlace.value;
+  await closeCity();
+  if (place) g.flyToPoint(place.lat, place.lon, 12);
+}
+
 const playCard = useTemplateRef<{ focus: () => void }>('playCard');
 
 /** What the list says under a place's name: where it is, and how it went. */
@@ -158,6 +171,7 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', syncFromHash));
     :title="cityPlace?.name ?? cityId"
     :density="cityPlace?.density"
     @close="closeCity"
+    @zoom-out="zoomedOut"
     @over="(seconds) => play.died(cityId as string, seconds)"
   />
 </template>

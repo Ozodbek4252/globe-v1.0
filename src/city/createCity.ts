@@ -338,6 +338,8 @@ export interface CityScene {
   onGame(listener: (notice: GameNotice) => void): Unsubscribe;
   /** Fires about ten times a second once the radar is on (and once with null when it goes off). */
   onRadar(listener: (frame: RadarFrame | null) => void): Unsubscribe;
+  /** Fires when the camera is as far out as it goes and the wheel keeps zooming out: time for the globe. */
+  onZoomOut(listener: () => void): Unsubscribe;
   /** Start again from the beginning with a new random game. */
   restart(): void;
   /** Stop or resume the game. The picture keeps drawing; nothing in the game moves. */
@@ -926,10 +928,23 @@ export async function createCityScene(
   const onPointerLeave = (e: PointerEvent): void => {
     if (e.pointerType === 'mouse' && !pointers.has(e.pointerId)) aimScreen = null;
   };
+  // Zooming out past the edge of the city hands you back to the globe: a few more notches of the wheel
+  // once the camera is as far out as it goes.
+  const zoomOutEvents = createEmitter<void>();
+  let wheeledPast = 0;
   const onWheel = (e: WheelEvent): void => {
     e.preventDefault();
     const lines = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1;
-    goal = zoom(goal, Math.exp(e.deltaY * lines * 0.0011));
+    const out = e.deltaY * lines;
+    const atTheEdge = goal.distance >= MAX_DISTANCE - 1;
+    goal = zoom(goal, Math.exp(out * 0.0011));
+    if (out > 0 && atTheEdge) {
+      wheeledPast += out;
+      if (wheeledPast > 450) {
+        wheeledPast = 0;
+        zoomOutEvents.emit();
+      }
+    } else wheeledPast = 0;
     introUntil = 0;
   };
   const onContextMenu = (e: Event): void => e.preventDefault();
@@ -1416,6 +1431,7 @@ export async function createCityScene(
     onPlayer: playerEvents.on,
     onGame: notices.on,
     onRadar: radarFrames.on,
+    onZoomOut: zoomOutEvents.on,
     restart,
     setPaused(p) {
       paused = p && game.status === 'playing';
@@ -1560,6 +1576,7 @@ export async function createCityScene(
       playerEvents.clear();
       notices.clear();
       radarFrames.clear();
+      zoomOutEvents.clear();
       survivor.dispose();
       pickupMarkers.dispose();
       sun.shadow.map?.dispose();

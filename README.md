@@ -123,6 +123,11 @@ the TV Tower, Paris around the Eiffel Tower, Tokyo Tower and Shiba, Midtown Manh
 London at Tower Bridge, Sydney's Circular Quay, and Oia, a village on Santorini. A crowd is sized from
 each place's own density of people (a rough public figure, in `public/cities/index.json`).
 
+**The wheel joins the two views.** Zoom into a pin as far as the globe goes and keep going, and you
+drop into that place; in the city, zoom out as far as the camera goes (1.8 km up) and keep going, and
+you are back on the globe over it. (It is a hand-off, not one continuous zoom: the globe and the city
+are two different pictures.)
+
 **A place falls when you die in it.** Its pin turns into a red cross, and with the **Lights** layer on, a
 patch of darkness spreads over its glow on the globe. It stays dark, with the longest you lasted, until
 you **Try again** there (which lights it up for the new game). What happened is kept in this browser
@@ -167,7 +172,10 @@ the clock at the top of the screen counts how long you have lasted.
 (7,700 per square kilometre in Tashkent) and shared between the real buildings by size, height and kind: a tall
 block of flats holds hundreds, a house a handful, a shed nobody. Nearly everyone is indoors; the rest
 are out in the street as individuals (drawn as dots from high up) who stroll about, run from zombies
-and gunfire, and make for the nearest door. How many are out follows the hour: a few percent in the
+and gunfire (they notice a zombie a street away, about 40 m, and zombies notice them from 30 and chase
+them; a walker cannot catch someone running in the open, a runner can), and make for the nearest door.
+The newly turned set off down the street rather than crowding the door they came out of, so the
+outbreak spreads through the district. How many are out follows the hour: a few percent in the
 small hours, over a tenth in the morning rush and the evening. People leave their buildings and go home
 again through the day, and the more of the city has turned, the more of them stay in.
 
@@ -257,7 +265,7 @@ setMode(id)           setLayer('labels' | 'grid' | 'cities' | 'lights' | 'spin',
 selectCountry(code)   togglePick(code)    flyToCountry(code)
 closeCard()           clearPicks()        zoomBy(factor)       resetView()
 onHover(cb)           onPicksChange(cb)   onViewChange(cb)     onLightsStatus(cb)
-setMarkers(pins)      setChosenMarker(id) flyToPoint(lat, lon)  onMarkerClick(cb)
+setMarkers(pins)      setChosenMarker(id) flyToPoint(lat, lon)  onMarkerClick(cb)  onZoomIntoMarker(cb)
 destroy()
 ```
 

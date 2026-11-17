@@ -73,6 +73,7 @@ export function useGlobe(host: Readonly<ShallowRef<HTMLElement | null>>) {
   let markers: readonly GlobeMarker[] = [];
   let chosenMarker: string | null = null;
   const markerListeners = new Set<(id: string) => void>();
+  const zoomListeners = new Set<(id: string) => void>();
   const unsubscribe: Unsubscribe[] = [];
 
   writeStored(MODE_KEY, modeId.value);
@@ -93,6 +94,7 @@ export function useGlobe(host: Readonly<ShallowRef<HTMLElement | null>>) {
     globe.setChosenMarker(chosenMarker);
     unsubscribe.push(
       globe.onMarkerClick((id) => markerListeners.forEach((listener) => listener(id))),
+      globe.onZoomIntoMarker((id) => zoomListeners.forEach((listener) => listener(id))),
       globe.onHover((h) => (hover.value = h)),
       globe.onPicksChange((s) => {
         picks.value = s.picks;
@@ -199,6 +201,11 @@ export function useGlobe(host: Readonly<ShallowRef<HTMLElement | null>>) {
     onMarkerClick(listener: (id: string) => void): () => void {
       markerListeners.add(listener);
       return () => markerListeners.delete(listener);
+    },
+    /** Called with the id of a pin the view was zoomed into (as close as the globe goes, and further). */
+    onZoomIntoMarker(listener: (id: string) => void): () => void {
+      zoomListeners.add(listener);
+      return () => zoomListeners.delete(listener);
     },
   };
 }

@@ -458,7 +458,7 @@ describe('going for other targets', () => {
     targets.x[1] = 10;
     targets.y[1] = 40; // slot 1 is inactive
     const far = standing(h, 60, -60, Math.PI);
-    put(0, 60 - 30, -60); // 30 m from `far`
+    put(0, 60 - 45, -60); // 45 m from `far`: beyond its sight of 30
     const blocked = standing(h, 12, 0, Math.PI);
     put(2, -2, 0); // on the other side of the wall
     run(h, 120, 120, 4);
