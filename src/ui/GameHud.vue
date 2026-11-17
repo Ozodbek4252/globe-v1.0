@@ -83,6 +83,22 @@ function push(n: GameNotice): void {
       later(() => toast.value?.id === id && (toast.value = null), 2200);
       break;
     }
+    case 'enter':
+      toast.value = { id, text: 'Safe for now. The door will not hold forever.' };
+      announcement.value = `Inside ${n.place}. Rest here, but watch the door.`;
+      later(() => toast.value?.id === id && (toast.value = null), 3200);
+      break;
+    case 'breach':
+      banner.value = {
+        id,
+        tone: 'wave',
+        title: 'The door gave way',
+        sub: `${n.place} is lost. Run, or make a stand.`,
+        angle: null,
+      };
+      announcement.value = `The door of ${n.place} gave way. The shelter is lost.`;
+      later(() => banner.value?.id === id && (banner.value = null), 5000);
+      break;
     case 'radar':
       banner.value = {
         id,
@@ -172,6 +188,22 @@ const accuracy = computed(() =>
           >
           {{ player.objective.text }} · {{ Math.round(player.objective.distance) }} m
           {{ player.objective.compass }}
+        </span>
+      </div>
+
+      <div v-if="player.inside" class="hud-inside">
+        <span class="hud-label">Sheltering in {{ player.inside.name }}</span>
+        <span
+          class="hud-door"
+          :class="{ low: player.inside.door < 0.3 }"
+          role="progressbar"
+          aria-label="Door"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          :aria-valuenow="Math.round(player.inside.door * 100)"
+        >
+          <i :style="{ width: Math.round(player.inside.door * 100) + '%' }"></i>
+          <span>Door {{ Math.round(player.inside.door * 100) }}%</span>
         </span>
       </div>
 
@@ -381,6 +413,45 @@ const accuracy = computed(() =>
   color: #4aa8ff;
   font-size: 12px;
   line-height: 1;
+}
+
+/* ---- hiding indoors */
+.hud-inside {
+  position: absolute;
+  left: 50%;
+  bottom: 196px;
+  transform: translateX(-50%);
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.85);
+}
+.hud-door {
+  position: relative;
+  display: block;
+  width: min(300px, 70vw);
+  height: 18px;
+  border-radius: 9px;
+  border: 1px solid rgba(53, 208, 192, 0.6);
+  background: var(--panel);
+  overflow: hidden;
+}
+.hud-door i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, #1f8f84, #35d0c0);
+  transition: width 0.3s linear;
+}
+.hud-door.low i {
+  background: #e23a2e;
+}
+.hud-door span {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font: 600 11px var(--f-mono);
+  letter-spacing: 0.06em;
 }
 
 /* ---- the door you are standing at */

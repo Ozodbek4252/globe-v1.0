@@ -13,7 +13,7 @@ import {
   type GameInput,
   type GameOptions,
 } from '../src/sim/game';
-import { hordeChecksum, spawnZombie, ZKind, ZState } from '../src/sim/horde';
+import { hordeChecksum, sendHunting, spawnZombie, ZKind, ZState } from '../src/sim/horde';
 import { PLACES, type PlaceBuilding } from '../src/sim/places';
 
 const DT = 1 / 60;
@@ -628,5 +628,169 @@ describe('the next wave is announced', () => {
   it('is the same announcement for the same seed', () => {
     expect(setup({}, { seed: 5 }).g.waveAngle).toBe(setup({}, { seed: 5 }).g.waveAngle);
     expect(setup({}, { seed: 5 }).g.waveAngle).not.toBe(setup({}, { seed: 6 }).g.waveAngle);
+  });
+});
+
+describe('shelters', () => {
+  /** A game with the survivor at the shelter's door. */
+  const atDoor = (options: Partial<GameOptions> = {}) => {
+    const t = district(options);
+    t.goTo('shelter');
+    return { ...t, shelter: t.place('shelter') };
+  };
+  /** A zombie on the survivor's trail, right at the door (or `away` metres out along the door's normal). */
+  const hunter = (t: ReturnType<typeof atDoor>, away = 1.2) => {
+    const i = spawnZombie(
+      t.g.horde,
+      t.shelter.x + t.shelter.nx * away,
+      t.shelter.y + t.shelter.ny * away,
+      ZKind.WALKER,
+      ZState.CHASE,
+    );
+    sendHunting(t.g.horde, i, 400);
+    return i;
+  };
+
+  it('goes in and comes out again', () => {
+    const t = atDoor();
+    expect(interactionAt(t.g, t.world)?.label).toBe('Go inside');
+    t.run({ interact: true }, DT);
+    expect(t.g.inside).toBe(t.shelter.id);
+    expect(t.count('enter')).toBe(1);
+    expect(interactionAt(t.g, t.world)?.label).toBe('Leave the shelter');
+    t.run({ interact: true }, DT);
+    expect(t.g.inside).toBe(-1);
+    expect(t.count('leave')).toBe(1);
+  });
+
+  it('can only be left from the inside, at any distance from the door (you cannot walk off)', () => {
+    const t = atDoor();
+    t.run({ interact: true }, DT);
+    t.run({ moveX: 1, moveY: 0, sprint: true }, 1);
+    expect(Math.hypot(t.g.player.x - t.shelter.x, t.g.player.y - t.shelter.y)).toBeLessThan(0.01);
+  });
+
+  it('does not let you shoot, shove or aim from indoors, but lets you reload', () => {
+    const t = atDoor();
+    t.run({ interact: true }, DT);
+    const heading = t.g.player.heading;
+    t.run({ ...EAST, fire: true, shove: true }, 1);
+    expect(t.g.stats.shots).toBe(0);
+    expect(t.g.stats.shoves).toBe(0);
+    expect(t.g.player.heading).toBe(heading);
+    t.g.ammo = 4;
+    t.run({ reload: true }, 2);
+    expect(t.g.ammo).toBe(GAME.weapon.mag);
+  });
+
+  it('heals you to full, much faster than outdoors', () => {
+    const t = atDoor();
+    t.g.health = 30;
+    t.g.sinceHurt = 0; // just hurt: outdoors you would wait eight seconds to start healing, and stop at 60
+    t.run({ interact: true }, DT);
+    t.run({}, 10);
+    expect(t.g.health).toBeGreaterThan(60);
+    t.run({}, 12);
+    expect(t.g.health).toBe(GAME.health);
+  });
+
+  it('is silent to go in, and out of sight once there', () => {
+    const t = atDoor();
+    const watcher = t.still(t.shelter.x + t.shelter.nx * 12, t.shelter.y + t.shelter.ny * 12);
+    t.g.horde.heading[watcher] = Math.atan2(-t.shelter.ny, -t.shelter.nx); // facing the door, 12 m off
+    t.run({ interact: true }, DT);
+    t.run({}, 2);
+    expect(t.g.noises).toHaveLength(0);
+    expect(t.g.horde.state[watcher]).toBe(ZState.WANDER); // it does not see anyone
+
+    // the same zombie notices a survivor standing out in the street
+    const open = district();
+    open.goTo('shelter');
+    const w2 = open.still(
+      open.place('shelter').x + open.place('shelter').nx * 12,
+      open.place('shelter').y + open.place('shelter').ny * 12,
+    );
+    open.g.horde.heading[w2] = Math.atan2(-open.place('shelter').ny, -open.place('shelter').nx);
+    open.run({}, 2);
+    expect(open.g.horde.state[w2]).toBe(ZState.CHASE);
+  });
+
+  it('shakes off ordinary pursuers, who give up after a few seconds', () => {
+    const t = atDoor();
+    const chaser = spawnZombie(
+      t.g.horde,
+      t.shelter.x + t.shelter.nx * 1.2,
+      t.shelter.y + t.shelter.ny * 1.2,
+      ZKind.WALKER,
+      ZState.CHASE,
+    );
+    t.run({ interact: true }, DT);
+    t.run({}, 12);
+    expect(t.g.horde.state[chaser]).not.toBe(ZState.CHASE);
+    expect(t.g.horde.state[chaser]).not.toBe(ZState.ATTACK);
+    const door = t.g.doors[t.shelter.id];
+    t.run({}, 10);
+    expect(t.g.doors[t.shelter.id]).toBe(door); // nothing is hitting it any more
+  });
+
+  it('is battered by zombies on the trail, not the survivor: no health is lost while the door holds', () => {
+    const t = atDoor();
+    for (let k = 0; k < 4; k++) hunter(t, 1.2 + k * 0.5);
+    t.g.health = 80;
+    t.run({ interact: true }, DT);
+    t.run({}, 12);
+    expect(t.g.doors[t.shelter.id]).toBeLessThan(GAME.shelter.door);
+    expect(t.g.doors[t.shelter.id]).toBeGreaterThan(0);
+    expect(t.g.stats.damageTaken).toBe(0);
+    expect(t.g.health).toBeGreaterThanOrEqual(80);
+    const doorEvents = t.events.filter((e) => e.type === 'door');
+    expect(doorEvents.length).toBeGreaterThan(2);
+    expect(doorEvents.length).toBeLessThan(60); // throttled, not one per step
+    const fractions = doorEvents.map((e) => (e.type === 'door' ? e.fraction : 1));
+    expect(fractions[fractions.length - 1]).toBeLessThan(fractions[0]);
+  });
+
+  it('gives way in the end: you are thrown out hurt and the shelter is lost for good', () => {
+    const t = atDoor();
+    t.g.doors[t.shelter.id] = 20;
+    for (let k = 0; k < 3; k++) hunter(t, 1.2 + k * 0.4);
+    t.run({ interact: true }, DT);
+    t.run({}, 20);
+    expect(t.count('breach')).toBe(1);
+    expect(t.g.inside).toBe(-1);
+    expect(t.g.breached[t.shelter.id]).toBe(true);
+    expect(t.g.stats.damageTaken).toBeGreaterThanOrEqual(GAME.shelter.breachDamage);
+    expect(interactionAt(t.g, t.world)).toBeNull(); // "Go inside" is no longer offered
+    t.run({ interact: true }, DT);
+    expect(t.g.inside).toBe(-1);
+  });
+
+  it('throws the horde back from a bursting door, so there is a moment to act', () => {
+    const t = atDoor();
+    t.g.doors[t.shelter.id] = 5;
+    const near = hunter(t, 1.2);
+    const far = hunter(t, 30); // well outside the blast
+    t.run({ interact: true }, DT);
+    // step to the very moment the door gives way, and look then
+    for (let s = 0; s < 600 && t.count('breach') === 0; s++) t.run({}, DT);
+    expect(t.count('breach')).toBe(1);
+    expect(t.g.horde.stun[near]).toBeGreaterThan(1); // thrown back and reeling
+    expect(Math.hypot(t.g.horde.vx[near], t.g.horde.vy[near])).toBeGreaterThan(3);
+    expect(t.g.horde.stun[far]).toBe(0); // the one well outside the blast is untouched
+    expect(t.g.status).toBe('playing'); // not dead on the spot
+  });
+
+  it('still lets the rescue arrive while you are inside', () => {
+    const t = atDoor({ rescueAt: 5 });
+    t.run({ interact: true }, DT);
+    t.run({}, 6);
+    expect(t.g.status).toBe('won');
+  });
+
+  it('keeps doors only for shelters, and a fresh game starts with them whole', () => {
+    const t = district();
+    t.world.places.forEach((p) => {
+      expect(t.g.doors[p.id]).toBe(p.kind === 'shelter' ? GAME.shelter.door : 0);
+    });
   });
 });

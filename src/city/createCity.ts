@@ -166,6 +166,8 @@ export interface PlayerStatus {
   radarOn: boolean;
   /** The next goal, how far off it is, and where it lies on the screen (radians clockwise from up). */
   objective: { text: string; distance: number; angle: number; compass: string } | null;
+  /** Which shelter the survivor is hiding in, and how much of its door is left (0 to 1); null outdoors. */
+  inside: { name: string; door: number } | null;
 }
 
 /** The radar's view of the world, centred on the survivor with "up" ahead of the camera. */
@@ -190,6 +192,8 @@ export type GameNotice =
   /** A shop, clinic or armory was searched (all zero when there was nothing you could use). */
   | { type: 'loot'; ammo: number; health: number; armory: boolean; place: string }
   | { type: 'radar'; place: string }
+  | { type: 'enter'; place: string }
+  | { type: 'breach'; place: string }
   | { type: 'rescue'; seconds: number }
   /** A new game has begun: forget everything announced. */
   | { type: 'restart' }
@@ -239,6 +243,9 @@ export interface CityDebug {
     radarOn: boolean;
     /** How many places have been used up. */
     used: number;
+    /** The place id of the shelter the survivor is in (-1 outdoors), and what is left of its door. */
+    inside: number;
+    door: number;
   };
 }
 
@@ -608,6 +615,7 @@ export async function createCityScene(
   );
   own(placeMarkers);
   scene.add(placeMarkers.object);
+  const markerSpent: boolean[] = gameWorld.places.map(() => false);
   const helicopter = createHelicopter();
   own(helicopter);
   scene.add(helicopter.object);
@@ -917,6 +925,12 @@ export async function createCityScene(
       case 'radar':
         notices.emit({ type: 'radar', place: gameWorld.places[e.place].name });
         break;
+      case 'enter':
+        notices.emit({ type: 'enter', place: gameWorld.places[e.place].name });
+        break;
+      case 'breach':
+        notices.emit({ type: 'breach', place: gameWorld.places[e.place].name });
+        break;
       case 'wave':
         notices.emit({
           type: 'wave',
@@ -1083,6 +1097,7 @@ export async function createCityScene(
     // a dead survivor falls over
     downAmount = gamePhase === 'lost' ? Math.min(1, downAmount + dt / 0.6) : 0;
     survivor.setDown(downAmount);
+    survivor.object.visible = game.inside < 0; // out of sight while sheltering
     survivor.place(
       px,
       py,
@@ -1117,7 +1132,7 @@ export async function createCityScene(
     survivor.setRingScale(clamp(current.distance / 36, 1, 5));
 
     // flashlight: on by itself when it gets dark, and L overrides
-    const lit = flashlightOn();
+    const lit = flashlightOn() && game.inside < 0;
     flashlight.intensity = lit ? 420 * (0.35 + 0.65 * darkness) : 0;
     flashlight.position.set(
       px + Math.cos(player.heading) * 0.3,
@@ -1133,11 +1148,13 @@ export async function createCityScene(
     // the horde, the supplies, the shots and the rescue
     zombies.update(game.horde, dt, current.x, -current.z, current.distance);
     pickupMarkers.sync(game.pickups, now / 1000, darkness);
-    placeMarkers.sync(game.used, now / 1000, darkness, current.distance);
+    // a place that is used up, or a shelter whose door has gone, fades
+    for (let i = 0; i < markerSpent.length; i++) markerSpent[i] = game.used[i] || game.breached[i];
+    placeMarkers.sync(markerSpent, now / 1000, darkness, current.distance);
     const aimMode: AimMode =
       game.reloading > 0 ? 'reloading' : game.ammo === 0 && game.reserve === 0 ? 'empty' : 'ready';
     effects.setAim(
-      aim && gamePhase === 'playing' ? aim[0] : null,
+      aim && gamePhase === 'playing' && game.inside < 0 ? aim[0] : null,
       aim ? aim[1] : 0,
       clamp(current.distance / 36, 1, 5),
       aimMode,
@@ -1251,6 +1268,13 @@ export async function createCityScene(
         prompt: here ? { label: here.label, name: here.place.name } : null,
         radarOn: game.radarOn,
         objective,
+        inside:
+          game.inside >= 0
+            ? {
+                name: gameWorld.places[game.inside].name,
+                door: game.doors[game.inside] / GAME.shelter.door,
+              }
+            : null,
       });
     }
 
@@ -1396,6 +1420,8 @@ export async function createCityScene(
             heading: game.player.heading,
             radarOn: game.radarOn,
             used: game.used.filter(Boolean).length,
+            inside: game.inside,
+            door: game.inside >= 0 ? game.doors[game.inside] : -1,
           }),
         }
       : undefined,

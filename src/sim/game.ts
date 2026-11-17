@@ -98,6 +98,19 @@ export const GAME = {
   /** The helicopter is heard this many seconds before it lands, and every zombie in earshot comes. */
   inbound: 14,
   inboundNoise: 130,
+  shelter: {
+    /** How much battering a shelter's door takes, and how much of each blow lands on it (a hit is 9-14). */
+    door: 600,
+    doorFactor: 0.4,
+    /** Health regained per second indoors (to full), with no waiting. */
+    heal: 3.5,
+    /** What the survivor suffers when the door gives way and the horde floods in. */
+    breachDamage: 25,
+    /** The bursting door throws back everything this near (metres), hard, and stuns it (seconds). */
+    breachBlast: 5,
+    breachBlastSpeed: 8,
+    breachStun: 1.6,
+  },
 } as const;
 
 export type GameStatus = 'playing' | 'won' | 'lost';
@@ -130,6 +143,12 @@ export type GameEvent =
   | { type: 'loot'; place: number; ammo: number; health: number; armory: boolean }
   /** The radar is on: the survivor can see the horde now. */
   | { type: 'radar'; place: number }
+  | { type: 'enter'; place: number }
+  | { type: 'leave'; place: number }
+  /** The door of the shelter you are in took a beating; `fraction` of it is left (0 to 1). */
+  | { type: 'door'; place: number; fraction: number }
+  /** The door gave way: the horde is in, and the shelter is lost. */
+  | { type: 'breach'; place: number }
   | { type: 'wave'; number: number; size: number; angle: number }
   /** The helicopter is coming: `angle` is the direction it flies in from, `seconds` how long until it is here. */
   | { type: 'rescue'; angle: number; seconds: number }
@@ -232,6 +251,14 @@ export interface GameState {
   used: boolean[];
   /** The radar is on, so the horde and the next wave are visible. */
   radarOn: boolean;
+  /** The shelter the survivor is in (a place id), or -1. */
+  inside: number;
+  /** What is left of each shelter's door (0 for places that are not shelters). */
+  doors: number[];
+  /** Shelters whose doors have given way: they can not be used again. */
+  breached: boolean[];
+  /** Seconds since the last "door" event, so a beating does not flood the event queue. */
+  doorEventTimer: number;
   /** The helicopter has been heard and is on its way. */
   inbound: boolean;
   inboundTimer: number;
@@ -284,6 +311,10 @@ export function createGame(world: GameWorld, options: GameOptions): GameState {
     wavesOn: options.waves ?? true,
     used: world.places.map(() => false),
     radarOn: false,
+    inside: -1,
+    doors: world.places.map((p) => (p.kind === 'shelter' ? GAME.shelter.door : 0)),
+    breached: world.places.map(() => false),
+    doorEventTimer: 0,
     inbound: false,
     inboundTimer: 0,
     stats: { kills: 0, shots: 0, hits: 0, damageTaken: 0, shoves: 0 },
@@ -392,16 +423,22 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
     g.fireCooldown = Math.max(0, g.fireCooldown - dt);
     g.shoveCooldown = Math.max(0, g.shoveCooldown - dt);
 
+    // Indoors there is no walking, aiming, shooting or shoving: only reloading, resting and leaving.
+    const indoors = g.inside >= 0;
+    const act: GameInput = indoors
+      ? { ...NO_INPUT, reload: input.reload, interact: input.interact }
+      : input;
+
     // the survivor
     const p0 = g.player;
     let face: number | null = null;
-    if (input.aim && Math.hypot(input.aim[0] - p0.x, input.aim[1] - p0.y) > 0.6) {
-      face = Math.atan2(input.aim[1] - p0.y, input.aim[0] - p0.x);
+    if (act.aim && Math.hypot(act.aim[0] - p0.x, act.aim[1] - p0.y) > 0.6) {
+      face = Math.atan2(act.aim[1] - p0.y, act.aim[0] - p0.x);
     }
     const slow = Math.max(GAME.grabFloor, 1 - GAME.grabSlow * g.horde.engaged);
     g.player = stepPlayer(
       p0,
-      { moveX: input.moveX, moveY: input.moveY, sprint: input.sprint, face, slow },
+      { moveX: act.moveX, moveY: act.moveY, sprint: act.sprint, face, slow },
       colliders,
       dt,
     );
@@ -419,13 +456,16 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
       }
     } else g.stepTimer = 0;
 
-    stepWeapon(g, input, face, colliders, dt);
-    if (input.shove) tryShove(g);
-    if (input.interact) interact(g, world);
-    collectPickups(g);
+    stepWeapon(g, act, face, colliders, dt);
+    if (act.shove) tryShove(g);
+    if (act.interact) interact(g, world);
+    if (!indoors) collectPickups(g);
 
-    // regain a little health after a quiet spell
-    if (g.sinceHurt > GAME.regenDelay && g.health < GAME.regenCap) {
+    if (g.inside >= 0) {
+      // safe for now: rest and recover to full health
+      g.health = Math.min(GAME.health, g.health + GAME.shelter.heal * dt);
+    } else if (g.sinceHurt > GAME.regenDelay && g.health < GAME.regenCap) {
+      // outdoors, regain a little health after a quiet spell
       g.health = Math.min(GAME.regenCap, g.health + GAME.regenRate * dt);
     }
 
@@ -466,6 +506,7 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
       px: g.player.x,
       py: g.player.y,
       playerAlive: playing,
+      hidden: playing && g.inside >= 0,
       noises: g.noises,
     },
     dt,
@@ -473,6 +514,8 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
   );
 
   if (playing) {
+    if (g.inside >= 0 && g.horde.doorDamage > 0) batterDoor(g, world, g.horde.doorDamage);
+    g.doorEventTimer = Math.max(0, g.doorEventTimer - dt);
     if (damage > 0) hurt(g, damage, g.horde.lastHitX, g.horde.lastHitY);
     if (g.health <= 0) {
       g.health = 0;
@@ -483,6 +526,37 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
       g.status = 'won';
       emit(g, { type: 'won' });
     }
+  }
+}
+
+/** Zombies are hammering the door of the shelter the survivor is in. If it gives way, they are in. */
+function batterDoor(g: GameState, world: GameWorld, blows: number): void {
+  const id = g.inside;
+  const place = world.places[id];
+  g.doors[id] = Math.max(0, g.doors[id] - blows * GAME.shelter.doorFactor);
+  if (g.doors[id] <= 0) {
+    g.breached[id] = true;
+    g.inside = -1;
+    emit(g, { type: 'breach', place: id });
+    hurt(g, GAME.shelter.breachDamage, place.x + place.nx, place.y + place.ny);
+    // the door bursts open and throws back whatever is at it: a moment to run or fight
+    const h = g.horde;
+    const r = GAME.shelter.breachBlast;
+    for (let i = 0; i < h.used; i++) {
+      if (!isAlive(h, i)) continue;
+      const dx = h.x[i] - place.x;
+      const dy = h.y[i] - place.y;
+      const d = Math.hypot(dx, dy);
+      if (d > r) continue;
+      const away = d > 1e-3 ? [dx / d, dy / d] : [place.nx, place.ny];
+      shoveZombie(h, i, away[0], away[1], GAME.shelter.breachBlastSpeed, GAME.shelter.breachStun);
+    }
+    return;
+  }
+  // tell the picture, but not sixty times a second
+  if (g.doorEventTimer <= 0) {
+    g.doorEventTimer = 0.4;
+    emit(g, { type: 'door', place: id, fraction: g.doors[id] / GAME.shelter.door });
   }
 }
 
@@ -632,6 +706,11 @@ export interface Interaction {
 /** The place whose door the survivor is standing at, and what using it would do. Null if none. */
 export function interactionAt(g: GameState, world: GameWorld): Interaction | null {
   if (g.status !== 'playing') return null;
+  // indoors, the only thing to do is leave
+  if (g.inside >= 0) {
+    const place = world.places[g.inside];
+    return { place, label: 'Leave the shelter' };
+  }
   let near: Place | null = null;
   let nearest: number = PLACES.reach;
   for (const place of world.places) {
@@ -649,7 +728,7 @@ export function interactionAt(g: GameState, world: GameWorld): Interaction | nul
     case 'armory':
       return g.used[near.id] ? null : { place: near, label: `Search ${near.name}` };
     default:
-      return null; // shelters come next
+      return g.breached[near.id] ? null : { place: near, label: 'Go inside' };
   }
 }
 
@@ -662,6 +741,18 @@ function interact(g: GameState, world: GameWorld): boolean {
     g.used[place.id] = true;
     g.radarOn = true;
     emit(g, { type: 'radar', place: place.id });
+    return true;
+  }
+  if (place.kind === 'shelter') {
+    if (g.inside >= 0) {
+      g.inside = -1;
+      emit(g, { type: 'leave', place: place.id });
+    } else {
+      g.inside = place.id;
+      g.player = { ...g.player, vx: 0, vy: 0, sprinting: false };
+      g.reloading = 0; // the reload is forgotten while the door closes: simpler than a half-finished one
+      emit(g, { type: 'enter', place: place.id });
+    }
     return true;
   }
   // supplies and the armory: something to take

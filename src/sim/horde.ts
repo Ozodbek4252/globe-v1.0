@@ -84,6 +84,11 @@ export interface HordeContext {
   py: number;
   /** False once the survivor is down: zombies lose interest. */
   playerAlive: boolean;
+  /**
+   * The survivor is indoors, behind a door: nothing can see, smell or hear them. Zombies already on
+   * the trail still come to the door, and what they do to the survivor they do to the door instead.
+   */
+  hidden?: boolean;
   noises: readonly Noise[];
 }
 
@@ -137,6 +142,8 @@ export interface Horde {
   grid: HordeGrid;
   /** Outputs of the latest step. */
   damage: number;
+  /** Damage dealt to the door the survivor is behind (when hidden). */
+  doorDamage: number;
   /** Zombies with their hands on the survivor right now. */
   engaged: number;
   lastHitX: number;
@@ -181,6 +188,7 @@ export function createHorde(capacity: number, seed: number): Horde {
       cellOf: new Int32Array(capacity).fill(-1),
     },
     damage: 0,
+    doorDamage: 0,
     engaged: 0,
     lastHitX: 0,
     lastHitY: 0,
@@ -320,6 +328,7 @@ export function hordeChecksum(h: Horde): number {
 /** Advance every zombie by `dt` seconds. Returns the damage the survivor took this step. */
 export function stepHorde(h: Horde, ctx: HordeContext, dt: number, tick: number): number {
   h.damage = 0;
+  h.doorDamage = 0;
   h.engaged = 0;
   buildGrid(h, ctx.px, ctx.py);
   const far2 = ZOMBIE.farRange * ZOMBIE.farRange;
@@ -379,7 +388,7 @@ function perceive(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number
 
   let aware = false;
   h.clear[i] = 0;
-  if (ctx.playerAlive) {
+  if (ctx.playerAlive && !ctx.hidden) {
     const range = s === ZState.CHASE ? ZOMBIE.chaseSight : ZOMBIE.sight;
     if (d < range) {
       const clear = lineOfSight(ctx.world, x, y, ctx.px, ctx.py);
@@ -595,6 +604,16 @@ function chase(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number): 
     h.timer[i] = 1;
     return;
   }
+  // A zombie that cannot see the survivor (indoors) only follows a cold trail: once it has gone
+  // without a sign for long enough it gives up, even if it is standing at the door.
+  if (ctx.hidden && h.timer[i] > ZOMBIE.loseTrack) {
+    h.timer[i] = 0;
+    if (Number.isNaN(h.tx[i])) {
+      h.state[i] = ZState.WANDER;
+      h.timer[i] = 1;
+    } else h.state[i] = ZState.INVESTIGATE;
+    return;
+  }
   const d = Math.sqrt(d2);
   if (d < ZOMBIE.attackStart && lineOfSight(ctx.world, h.x[i], h.y[i], ctx.px, ctx.py)) {
     h.state[i] = ZState.ATTACK;
@@ -633,16 +652,20 @@ function attack(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number):
         d <= ZOMBIE.attackReach &&
         lineOfSight(ctx.world, h.x[i], h.y[i], ctx.px, ctx.py)
       ) {
-        h.damage += kind.damage;
-        h.lastHitX = h.x[i];
-        h.lastHitY = h.y[i];
+        if (ctx.hidden) h.doorDamage += kind.damage;
+        else {
+          h.damage += kind.damage;
+          h.lastHitX = h.x[i];
+          h.lastHitY = h.y[i];
+        }
       }
       h.phase[i] = 1;
       h.attackT[i] = 0;
     }
   } else if (h.attackT[i] >= kind.cooldown) {
     h.state[i] = ctx.playerAlive ? ZState.CHASE : ZState.WANDER;
-    h.timer[i] = 0;
+    // seeing the survivor refreshes the trail; battering a door they are behind does not
+    h.timer[i] = ctx.hidden ? h.timer[i] + kind.windup + kind.cooldown : 0;
     h.phase[i] = 0;
     h.attackT[i] = 0;
     if (!ctx.playerAlive) h.tx[i] = Number.NaN;
