@@ -82,6 +82,21 @@ export interface Outcome {
   fallen: boolean;
   /** How many times you died there. */
   deaths: number;
+  /** Seconds survived in a game saved there and not finished: it can be continued. */
+  inPlay?: number;
+}
+
+/** A game is going on at a place (saved after `seconds`), or has stopped (0: the record is cleared). */
+export function markInPlay(outcomes: Outcomes, id: string, seconds: number): Outcomes {
+  const before = outcomes[id] ?? { best: 0, fallen: false, deaths: 0 };
+  if (seconds <= 0) {
+    if (before.inPlay === undefined) return outcomes;
+    return {
+      ...outcomes,
+      [id]: { best: before.best, fallen: before.fallen, deaths: before.deaths },
+    };
+  }
+  return { ...outcomes, [id]: { ...before, inPlay: Math.floor(seconds) } };
 }
 
 export type Outcomes = Readonly<Record<string, Outcome>>;
@@ -89,6 +104,7 @@ export type Outcomes = Readonly<Record<string, Outcome>>;
 /** You died in a place after `seconds`: it has fallen, and the record is updated. */
 export function recordDeath(outcomes: Outcomes, id: string, seconds: number): Outcomes {
   const before = outcomes[id];
+  // a death ends whatever game was going on there
   return {
     ...outcomes,
     [id]: {
@@ -124,6 +140,7 @@ export function parseOutcomes(text: string | null): Outcomes {
     const v = value as Record<string, unknown>;
     if (!isNumber(v.best) || v.best < 0 || !isNumber(v.deaths) || v.deaths < 0) continue;
     out[id] = { best: Math.floor(v.best), fallen: v.fallen === true, deaths: Math.floor(v.deaths) };
+    if (isNumber(v.inPlay) && v.inPlay > 0) out[id].inPlay = Math.floor(v.inPlay);
   }
   return out;
 }

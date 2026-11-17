@@ -213,8 +213,9 @@ describe('the real Tashkent district', () => {
     expect(g.population.zombies).toBe(GAME.outbreak.patients * 2);
     expect(g.horde.alive).toBe(0);
     const start = g.population.initial;
-    expect(start).toBeGreaterThan(25000);
-    expect(start).toBeLessThan(35000);
+    const km2 = ((t.colliders.half * 2) / 1000) ** 2; // the real density over the whole map
+    expect(start).toBeGreaterThan(GAME.outbreak.density * km2 * 0.95);
+    expect(start).toBeLessThan(GAME.outbreak.density * km2 * 1.05);
     const idle: GameInput = { ...NO_INPUT };
     let nearest = Infinity;
     for (let s = 0; s < 60 * 150; s++) {

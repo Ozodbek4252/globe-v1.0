@@ -125,13 +125,15 @@ each place's own density of people (a rough public figure, in `public/cities/ind
 
 **The wheel joins the two views.** Zoom into a pin as far as the globe goes and keep going, and you
 drop into that place; in the city, zoom out as far as the camera goes (1.8 km up) and keep going, and
-you are back on the globe over it. (It is a hand-off, not one continuous zoom: the globe and the city
-are two different pictures.)
+it asks whether you want the globe (so a wheel that runs on does not throw you out). It is a hand-off,
+not one continuous zoom: the globe and the city are two different pictures.
 
-**Leaving does not end the game.** Go back to the globe (the button, the pause menu, or zooming out)
-and the city you were in stays as it was, asleep: its card says how long you have lasted and offers
-**Continue**, and you come back to the pause menu, with the horde exactly where it stood. One city is
-kept at a time; opening another place, or going back after you died, starts fresh.
+**Your game is saved as you play.** Every five seconds, and whenever you look away or leave, the whole
+game (every zombie, every person, every door, the clock) is written to this browser's storage. Close
+the tab, come back tomorrow, open the place again: it is exactly where you left it, paused, with the
+horde where it stood. The card and the list say **in play** with the time so far, and the button says
+**Continue**. Dying ends the saved game, and so does **Start again**. A city you leave for the globe
+also stays alive in memory, so going straight back is instant.
 
 **A place falls when you die in it.** Its pin turns into a red cross, and with the **Lights** layer on, a
 patch of darkness spreads over its glow on the globe. It stays dark, with the longest you lasted, until
@@ -141,7 +143,7 @@ you **Try again** there (which lights it up for the new game). What happened is 
 ## The 3D city
 
 A place loads as a 3D district: its real building footprints, roads, water, parks and mapped trees, plus
-generated trees and street lamps (Tashkent has about 3,800 buildings; a village a few hundred). Three.js
+generated trees and street lamps (Tashkent, 3 km across, has about 9,000 buildings; a village a few hundred). Three.js
 and the city code download only when you press **Play here**, so the globe page stays light. The
 address holds the place: `/#city=paris` opens Paris directly (a bare `#city` is Tashkent, as it always
 was).
@@ -173,7 +175,7 @@ was).
 Stay alive as long as you can. There is no rescue and no cure: the outbreak is the whole story, and
 the clock at the top of the screen counts how long you have lasted.
 
-**The city is full of people.** Tens of thousands of them (about 30,000 in Tashkent), worked out from the real density of the place
+**The city is full of people.** Tens of thousands of them (about 69,000 in the 9 km² of Tashkent), worked out from the real density of the place
 (7,700 per square kilometre in Tashkent) and shared between the real buildings by size, height and kind: a tall
 block of flats holds hundreds, a house a handful, a shed nobody. Nearly everyone is indoors; the rest
 are out in the street as individuals (drawn as dots from high up) who stroll about, run from zombies

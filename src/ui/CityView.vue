@@ -1,5 +1,14 @@
 <script setup lang="ts">
-import { markRaw, onBeforeUnmount, onMounted, ref, shallowRef, useTemplateRef, watch } from 'vue';
+import {
+  markRaw,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  shallowRef,
+  useTemplateRef,
+  watch,
+} from 'vue';
 import type {
   CameraMode,
   CityScene,
@@ -10,6 +19,7 @@ import type {
   PlayerStatus,
   RadarFrame,
 } from '../city/createCity';
+import { deleteSave, getSave, putSave } from '../lib/saves';
 import GameHud from './GameHud.vue';
 import RadarScope from './RadarScope.vue';
 
@@ -116,8 +126,42 @@ function onTime(): void {
   sunElevation.value = Math.round(scene.sunElevation());
 }
 
+// ---- saving: every few seconds while playing, and whenever you look away or leave ----
+const SAVE_EVERY_MS = 5000;
+let saveTimer = 0;
+function saveNow(): void {
+  if (!scene || disposed || player.value?.phase !== 'playing') return;
+  void putSave(props.cityId, scene.save());
+}
+function onVisibility(): void {
+  if (document.visibilityState === 'hidden') saveNow();
+}
+
+// ---- leaving by the wheel: it asks first ----
+const askGlobe = ref(false);
+const leaveButton = useTemplateRef<HTMLButtonElement>('leaveButton');
+function leaveForGlobe(): void {
+  askGlobe.value = false;
+  saveNow();
+  emit('zoomOut');
+}
+function stay(): void {
+  askGlobe.value = false;
+  root.value?.focus();
+}
+
 function onKey(e: KeyboardEvent): void {
   if (!props.active) return; // asleep behind the globe
+  if (askGlobe.value) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      stay();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      leaveForGlobe();
+    }
+    return;
+  }
   if (e.key === 'Escape') {
     e.preventDefault();
     // Esc opens the pause menu while playing (and closes it); once the game is over it leaves
@@ -139,6 +183,7 @@ let wholeSeconds = -1;
 watch(
   () => props.active,
   (active) => {
+    if (!active) saveNow();
     scene?.setSleeping(!active);
     if (active) root.value?.focus();
   },
@@ -153,7 +198,10 @@ onMounted(async () => {
       import('../city/load'),
       import('../city/createCity'),
     ]);
-    const data = markRaw(await loadCity(props.cityId));
+    const [data, resume] = await Promise.all([
+      loadCity(props.cityId).then(markRaw),
+      getSave(props.cityId), // a game saved here earlier carries on where it left off
+    ]);
     if (disposed || !host.value) return;
     const link = linkOptions();
     if (link.hour !== undefined) hour.value = link.hour;
@@ -162,7 +210,7 @@ onMounted(async () => {
       view: link.view,
       camera: link.camera,
       player: link.player,
-      game: { ...link.game, density: link.game?.density ?? props.density },
+      game: { ...link.game, density: link.game?.density ?? props.density, resume },
       debug: link.debug,
       onProgress: (fraction, label) => {
         progress.value = fraction;
@@ -190,13 +238,25 @@ onMounted(async () => {
     });
     stopGame = created.onGame((n) => {
       hud.value?.push(n);
-      if (n.type === 'over') emit('over', n.time);
-      if (n.type === 'restart') emit('restarted');
+      // a game that is over, or begun again, is not one to come back to
+      if (n.type === 'over') {
+        void deleteSave(props.cityId);
+        emit('over', n.time);
+      }
+      if (n.type === 'restart') {
+        void deleteSave(props.cityId);
+        emit('restarted');
+      }
     });
     stopRadar = created.onRadar((f) => {
       radar.value = f;
     });
-    stopZoom = created.onZoomOut(() => emit('zoomOut'));
+    stopZoom = created.onZoomOut(() => {
+      askGlobe.value = true; // not straight away: it asks first
+      void nextTick(() => leaveButton.value?.focus());
+    });
+    saveTimer = window.setInterval(saveNow, SAVE_EVERY_MS);
+    document.addEventListener('visibilitychange', onVisibility);
     if (!props.active) created.setSleeping(true);
     ready.value = true;
   } catch (e) {
@@ -209,7 +269,10 @@ function restart(): void {
 }
 
 onBeforeUnmount(() => {
+  saveNow(); // the page is still here while the write goes through
   disposed = true;
+  window.clearInterval(saveTimer);
+  document.removeEventListener('visibilitychange', onVisibility);
   window.removeEventListener('keydown', onKey);
   stopStats?.();
   stopPlayer?.();
@@ -251,6 +314,27 @@ onBeforeUnmount(() => {
         @close="emit('close')"
         @resume="setPaused(false)"
       />
+      <div
+        v-if="askGlobe"
+        class="hud-over"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Back to the globe?"
+      >
+        <div class="hud-card city-ask">
+          <h2>Back to the globe?</h2>
+          <p>
+            Your game is saved as it stands. Come back to {{ title }} any time and carry on from
+            here.
+          </p>
+          <div class="hud-actions">
+            <button ref="leaveButton" class="city-btn primary" type="button" @click="leaveForGlobe">
+              To the globe <kbd>Enter</kbd>
+            </button>
+            <button class="city-btn" type="button" @click="stay">Stay <kbd>Esc</kbd></button>
+          </div>
+        </div>
+      </div>
       <button
         v-if="player?.phase === 'playing'"
         class="city-btn city-pause"

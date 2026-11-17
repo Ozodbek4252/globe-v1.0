@@ -586,7 +586,7 @@ function scatterStreetPeople(g: GameState, world: GameWorld): void {
 }
 
 /** Count everyone: indoors and in the street. Done about once a second. */
-function countPopulation(g: GameState): void {
+export function countPopulation(g: GameState): void {
   const inside = indoorCounts(g.outbreak);
   let bitten = inside.incubating;
   for (let i = 0; i < g.humans.used; i++) if (g.humans.state[i] === HState.BITTEN) bitten++;

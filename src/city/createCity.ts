@@ -44,6 +44,7 @@ import {
   weaponConfig,
   type GameEvent,
   type GameInput,
+  type GameOptions,
   type GameState,
   type GameStatus,
   type WeaponName,
@@ -51,6 +52,7 @@ import {
 import { sendHunting, spawnZombie, ZKind, ZState } from '../sim/horde';
 import { HState, spawnHuman } from '../sim/humans';
 import { speedOf, type PlayerState } from '../sim/player';
+import { isSavedGame, loadGame, saveGame, type SavedGame } from '../sim/save';
 import type { PlaceKind } from '../sim/places';
 import { compassName, screenAngle, screenOffset } from './bearings';
 import { createSurvivor } from './character';
@@ -298,6 +300,8 @@ export interface GameSetup {
   patients?: number;
   /** People per square kilometre. The default is the real density of the city. */
   density?: number;
+  /** A game saved earlier (what `CityScene.save()` gave), to carry on from. Anything else is ignored. */
+  resume?: unknown;
 }
 
 export interface CityOptions {
@@ -342,6 +346,8 @@ export interface CityScene {
   onZoomOut(listener: () => void): Unsubscribe;
   /** Start again from the beginning with a new random game. */
   restart(): void;
+  /** The game as it is now, as plain data, to be stored and given back as `GameSetup.resume`. */
+  save(): SavedGame;
   /** Stop or resume the game. The picture keeps drawing; nothing in the game moves. */
   setPaused(paused: boolean): void;
   togglePause(): void;
@@ -643,19 +649,30 @@ export async function createCityScene(
     REFERENCE_DAY,
     utcOffsetHours(data.center[0]),
   );
-  const newGame = (): GameState =>
-    createGame(gameWorld, {
-      seed,
-      startX: spawnX,
-      startY: spawnY,
-      clumps: setup.zombies,
-      patients: setup.patients,
-      density: setup.density,
-      startHour,
-      cycle: setup.cycle,
-      sunrise: sunToday?.sunrise,
-      sunset: sunToday?.sunset,
-    });
+  const gameOptions = (): GameOptions => ({
+    seed,
+    startX: spawnX,
+    startY: spawnY,
+    clumps: setup.zombies,
+    patients: setup.patients,
+    density: setup.density,
+    startHour,
+    cycle: setup.cycle,
+    sunrise: sunToday?.sunrise,
+    sunset: sunToday?.sunset,
+  });
+  // a saved game is taken up once, where it left off; a restart after that is a new game
+  let resume = isSavedGame(setup.resume) ? setup.resume : null;
+  const resumed = resume !== null;
+  const newGame = (): GameState => {
+    if (resume) {
+      const saved = resume;
+      resume = null;
+      seed = saved.options.seed;
+      return loadGame(gameWorld, saved);
+    }
+    return createGame(gameWorld, gameOptions());
+  };
   let game = newGame();
   let player: PlayerState = game.player;
   let previous: PlayerState = player;
@@ -833,7 +850,8 @@ export async function createCityScene(
   let interactQueued = false;
   let weaponQueued: 0 | 1 | 2 = 0;
   let triggerHeld = false;
-  let paused = false;
+  // a game taken up from a save starts paused: you look round before the horde moves
+  let paused = resumed && game.status === 'playing';
   // Asleep: the scene is kept but neither drawn nor stepped nor listening (the globe is showing).
   let sleeping = false;
   let aimScreen: { x: number; y: number } | null = null;
@@ -1440,6 +1458,7 @@ export async function createCityScene(
     onGame: notices.on,
     onRadar: radarFrames.on,
     onZoomOut: zoomOutEvents.on,
+    save: () => saveGame(game, gameOptions()),
     restart,
     setPaused(p) {
       paused = p && game.status === 'playing';

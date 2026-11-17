@@ -75,9 +75,14 @@ const cityId = ref<string | null>(null); // the city that is showing (null: the 
 const cityOver = ref(false);
 const cityTime = ref(0);
 const cityPlace = computed(() => play.places.value.find((p) => p.id === mountedId.value) ?? null);
-/** Seconds survived in a game that is still going at this place, or null if there is none. */
-const inPlay = (id: string): number | null =>
-  mountedId.value === id && !cityOver.value && cityTime.value > 0 ? cityTime.value : null;
+/**
+ * Seconds survived in a game that is still going at this place (alive here, or saved in this browser
+ * from before), or null if there is none.
+ */
+const inPlay = (id: string): number | null => {
+  if (mountedId.value === id && !cityOver.value && cityTime.value > 0) return cityTime.value;
+  return play.outcomes.value[id]?.inPlay ?? null;
+};
 const setHash = (hash: string): void =>
   history.replaceState(null, '', location.pathname + location.search + hash);
 
@@ -193,10 +198,16 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', syncFromHash));
     :active="cityId === mountedId"
     @close="closeCity"
     @zoom-out="zoomedOut"
-    @time="(seconds) => (cityTime = seconds)"
+    @time="
+      (seconds) => {
+        cityTime = seconds;
+        play.markInPlay(mountedId as string, seconds);
+      }
+    "
     @restarted="
       cityOver = false;
       cityTime = 0;
+      play.markInPlay(mountedId as string, 0);
     "
     @over="
       (seconds) => {

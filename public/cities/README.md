@@ -11,7 +11,7 @@ credit OpenStreetMap, and share the data under the same licence. The game's own 
 
 | File            | Area                                                | Extracted  |
 | --------------- | --------------------------------------------------- | ---------- |
-| `tashkent.json` | 2 km x 2 km around the Tashkent TV Tower (Mirabad)  | 2026-11-16 |
+| `tashkent.json` | 3 km x 3 km around the Tashkent TV Tower (Mirabad)  | 2026-11-17 |
 | `paris.json`    | 1.6 km x 1.6 km around the Eiffel Tower             | 2026-11-17 |
 | `tokyo.json`    | 1.6 km x 1.6 km around Tokyo Tower (Shiba)          | 2026-11-17 |
 | `newyork.json`  | 1.4 km x 1.4 km around Times Square (Midtown)       | 2026-11-17 |

@@ -5,6 +5,7 @@ import type { CityData } from '../src/city/types';
 import {
   cityHash,
   loadPlayable,
+  markInPlay,
   parseCityHash,
   parseOutcomes,
   parsePlayable,
@@ -167,6 +168,26 @@ describe('the places that ship with the game', () => {
   it('are described in the data notice', () => {
     const notice = readFileSync(resolve('public/cities/README.md'), 'utf8');
     for (const p of places) expect(notice, `${p.id}.json in the notice`).toContain(`${p.id}.json`);
+  });
+});
+
+describe('a game going on at a place', () => {
+  it('is marked with the seconds so far, kept across a reload, and cleared with zero or a death', () => {
+    let o: Outcomes = {};
+    o = markInPlay(o, 'paris', 187.6);
+    expect(o.paris).toEqual({ best: 0, fallen: false, deaths: 0, inPlay: 187 });
+    expect(parseOutcomes(serializeOutcomes(o))).toEqual(o);
+    o = markInPlay(o, 'paris', 0);
+    expect(o.paris).toEqual({ best: 0, fallen: false, deaths: 0 });
+    o = markInPlay(recordDeath(o, 'paris', 50), 'paris', 70);
+    o = recordDeath(o, 'paris', 90);
+    expect(o.paris.inPlay).toBeUndefined();
+    expect(o.paris.best).toBe(90);
+  });
+
+  it('leaves a record alone that has nothing to clear', () => {
+    const o: Outcomes = { paris: { best: 10, fallen: false, deaths: 1 } };
+    expect(markInPlay(o, 'paris', 0)).toBe(o);
   });
 });
 

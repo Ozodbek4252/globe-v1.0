@@ -3,6 +3,7 @@ import type { GlobeMarker } from '../globe/types';
 import { readStored, writeStored } from '../lib/storage';
 import {
   loadPlayable,
+  markInPlay,
   OUTCOMES_KEY,
   parseOutcomes,
   reclaim,
@@ -70,5 +71,8 @@ export function usePlay() {
     died: (id: string, seconds: number): void => save(recordDeath(outcomes.value, id, seconds)),
     /** Take a fallen place back. */
     reclaim: (id: string): void => save(reclaim(outcomes.value, id)),
+    /** A game is going on at this place, `seconds` in (0 when it has stopped). */
+    markInPlay: (id: string, seconds: number): void =>
+      save(markInPlay(outcomes.value, id, seconds)),
   };
 }
