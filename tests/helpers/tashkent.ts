@@ -1,0 +1,67 @@
+// The real Tashkent district as the tests see it: collision world (with trees and lamp posts) and an
+// independent "is this point inside a building?" check that does not use the game's own grids, so a
+// bug in those cannot hide itself. Built once and shared.
+
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { LAMP_STRIDE, placeLamps } from '../../src/city/lamps';
+import { buildOccupancy } from '../../src/city/occupancy';
+import { TREE_STRIDE, placeTrees } from '../../src/city/trees';
+import type { CityData } from '../../src/city/types';
+import { buildColliders, findSpawn, type Colliders } from '../../src/sim/colliders';
+import { pointInFlatRing } from '../../src/sim/grid';
+
+export interface TestCity {
+  city: CityData;
+  colliders: Colliders;
+  /** The open ground nearest the TV tower. */
+  spawn: [number, number];
+  insideBuilding: (x: number, y: number) => boolean;
+}
+
+let cached: TestCity | null = null;
+
+export function loadTashkent(): TestCity {
+  if (cached) return cached;
+  const city = JSON.parse(readFileSync(resolve('public/cities/tashkent.json'), 'utf8')) as CityData;
+  const grid = buildOccupancy(city, 2);
+  const lamps = placeLamps(city, grid);
+  const trees = placeTrees(city, grid);
+  const colliders = buildColliders(city, [
+    { data: trees.data, stride: TREE_STRIDE, count: trees.count, radius: 0.35 },
+    { data: lamps.data, stride: LAMP_STRIDE, count: lamps.count, radius: 0.15 },
+  ]);
+
+  // buildings bucketed by 50 m cell, so the check only looks at the few nearby
+  const bucket = new Map<string, CityData['buildings']>();
+  for (const b of city.buildings) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i < b.outer.length; i += 2) {
+      minX = Math.min(minX, b.outer[i]);
+      maxX = Math.max(maxX, b.outer[i]);
+      minY = Math.min(minY, b.outer[i + 1]);
+      maxY = Math.max(maxY, b.outer[i + 1]);
+    }
+    for (let cy = Math.floor(minY / 50); cy <= Math.floor(maxY / 50); cy++) {
+      for (let cx = Math.floor(minX / 50); cx <= Math.floor(maxX / 50); cx++) {
+        const key = `${cx},${cy}`;
+        const list = bucket.get(key);
+        if (list) list.push(b);
+        else bucket.set(key, [b]);
+      }
+    }
+  }
+  const insideBuilding = (x: number, y: number): boolean =>
+    (bucket.get(`${Math.floor(x / 50)},${Math.floor(y / 50)}`) ?? []).some(
+      (b) =>
+        pointInFlatRing(b.outer, x, y) && !(b.holes ?? []).some((h) => pointInFlatRing(h, x, y)),
+    );
+
+  const tower = city.towers.find((t) => t.height > 100);
+  const spawn = findSpawn(colliders, tower ? [tower.x, tower.y] : [0, 0], 200, 5);
+  cached = { city, colliders, spawn, insideBuilding };
+  return cached;
+}

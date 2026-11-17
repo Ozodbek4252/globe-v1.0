@@ -36,6 +36,36 @@ const run = (start: PlayerState, input: PlayerInput, seconds: number, w = open):
 const idle: PlayerInput = { moveX: 0, moveY: 0, sprint: false };
 const east: PlayerInput = { moveX: 1, moveY: 0, sprint: false };
 
+describe('aiming and being held back', () => {
+  it('faces the aim direction even when walking another way', () => {
+    const p = run(createPlayer(0, 0), { ...east, face: Math.PI / 2 }, 1); // walks east, faces north
+    expect(angleDelta(p.heading, Math.PI / 2)).toBeCloseTo(0, 6);
+    expect(p.x).toBeGreaterThan(2.5);
+  });
+
+  it('turns to face a target quickly, but not instantly', () => {
+    const p = stepPlayer(createPlayer(0, 0, 0), { ...idle, face: Math.PI }, open, DT);
+    expect(p.heading).toBeCloseTo(PLAYER.aimTurnRate * DT, 9);
+    const done = run(createPlayer(0, 0, 0), { ...idle, face: Math.PI }, 0.2);
+    expect(angleDelta(done.heading, Math.PI)).toBeCloseTo(0, 6);
+  });
+
+  it('keeps turning with the walk when there is no aim, as before', () => {
+    const none = run(createPlayer(0, 0, 0), { ...east, face: null }, 0.5);
+    const unset = run(createPlayer(0, 0, 0), east, 0.5);
+    expect(none).toEqual(unset);
+  });
+
+  it('is slowed by a multiplier on top speed, for walking and sprinting', () => {
+    const walk = run(createPlayer(0, 0), { ...east, slow: 0.5 }, 1);
+    expect(speedOf(walk)).toBeCloseTo(PLAYER.walkSpeed * 0.5, 6);
+    const sprint = run(createPlayer(0, 0), { ...east, sprint: true, slow: 0.5 }, 1);
+    expect(speedOf(sprint)).toBeCloseTo(PLAYER.sprintSpeed * 0.5, 6);
+    const normal = run(createPlayer(0, 0), { ...east, slow: 1 }, 1);
+    expect(normal).toEqual(run(createPlayer(0, 0), east, 1));
+  });
+});
+
 describe('walking', () => {
   it('speeds up to walking pace and no faster', () => {
     const p = run(createPlayer(0, 0), east, 1);

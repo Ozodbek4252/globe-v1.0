@@ -14,6 +14,8 @@ export const PLAYER = {
   decel: 34,
   /** How fast the body turns to face where it is going (radians/s). */
   turnRate: 14,
+  /** Turning to face the aim point is faster, so the gun follows the mouse closely. */
+  aimTurnRate: 24,
   /** Stamina is 0 to 1. Sprinting uses it, resting restores it after a short pause. */
   staminaDrain: 0.2,
   staminaRegen: 0.28,
@@ -44,6 +46,10 @@ export interface PlayerInput {
   moveX: number;
   moveY: number;
   sprint: boolean;
+  /** Face this direction (radians, counter-clockwise from east) instead of the way you walk: aiming. */
+  face?: number | null;
+  /** Multiplies top speed, 0 to 1: zombies hanging on slow you down. Default 1. */
+  slow?: number;
 }
 
 export function createPlayer(x: number, y: number, heading = Math.PI / 2): PlayerState {
@@ -98,7 +104,7 @@ export function stepPlayer(
   }
 
   // speed builds and bleeds off at a fixed rate, so movement has weight
-  const top = sprinting ? PLAYER.sprintSpeed : PLAYER.walkSpeed;
+  const top = (sprinting ? PLAYER.sprintSpeed : PLAYER.walkSpeed) * (input.slow ?? 1);
   const targetX = dirX * top;
   const targetY = dirY * top;
   const dvx = targetX - p.vx;
@@ -128,12 +134,14 @@ export function stepPlayer(
     }
   }
 
-  // turn toward the direction of travel
+  // turn toward where you are aiming, or else toward the direction of travel
   let heading = p.heading;
-  if (Math.hypot(vx, vy) > 0.4) {
-    const want = Math.atan2(vy, vx);
+  const face = input.face ?? null;
+  const aiming = face !== null;
+  if (aiming || Math.hypot(vx, vy) > 0.4) {
+    const want = face ?? Math.atan2(vy, vx);
     const turn = angleDelta(heading, want);
-    const maxTurn = PLAYER.turnRate * dt;
+    const maxTurn = (aiming ? PLAYER.aimTurnRate : PLAYER.turnRate) * dt;
     heading += Math.abs(turn) <= maxTurn ? turn : Math.sign(turn) * maxTurn;
   }
 
