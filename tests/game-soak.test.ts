@@ -60,6 +60,7 @@ describe('minutes of play in the real Tashkent', () => {
         reload: s % 600 === 0,
         shove: s % 240 === 0,
         interact: s % 300 === 0,
+        weapon: s % 1500 === 0 ? 2 : s % 1500 === 750 ? 1 : 0,
       };
       // keep the survivor alive so the soak covers the whole run
       if (g.health < 30) g.health = 100;

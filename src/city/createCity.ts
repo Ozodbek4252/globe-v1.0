@@ -40,10 +40,12 @@ import {
   rescueIn,
   stepGame,
   validSpot,
+  weaponConfig,
   type GameEvent,
   type GameInput,
   type GameState,
   type GameStatus,
+  type WeaponName,
 } from '../sim/game';
 import { sendHunting, spawnZombie, ZKind, ZState } from '../sim/horde';
 import { speedOf, type PlayerState } from '../sim/player';
@@ -142,7 +144,10 @@ export interface PlayerStatus {
   phase: GameStatus;
   /** 0 to 100. */
   health: number;
-  /** Rounds in the magazine, its size, and rounds in reserve. */
+  /** The gun in hand, and whether the shotgun has been found. */
+  weapon: WeaponName;
+  hasShotgun: boolean;
+  /** Rounds in the magazine, its size, and rounds in reserve (for the gun in hand). */
   ammo: number;
   magazine: number;
   reserve: number;
@@ -205,7 +210,16 @@ export type GameNotice =
   | { type: 'hurt'; amount: number; angle: number }
   | { type: 'pickup'; kind: 'ammo' | 'medkit' }
   /** A shop, clinic or armory was searched (all zero when there was nothing you could use). */
-  | { type: 'loot'; ammo: number; health: number; armory: boolean; place: string }
+  | {
+      type: 'loot';
+      ammo: number;
+      health: number;
+      armory: boolean;
+      shotgun: boolean;
+      place: string;
+    }
+  /** The gun in hand changed. */
+  | { type: 'weapon'; weapon: WeaponName }
   | { type: 'radar'; place: string }
   | { type: 'enter'; place: string }
   | { type: 'breach'; place: string; lost: number }
@@ -810,6 +824,7 @@ export async function createCityScene(
   let reloadQueued = false;
   let shoveQueued = false;
   let interactQueued = false;
+  let weaponQueued: 0 | 1 | 2 = 0;
   let triggerHeld = false;
   let aimScreen: { x: number; y: number } | null = null;
   const onKeyDown = (e: KeyboardEvent): void => {
@@ -825,6 +840,8 @@ export async function createCityScene(
       if (!e.repeat) shoveQueued = true;
     } else if (k === 'f' && cameraMode === 'follow') {
       if (!e.repeat) interactQueued = true; // use the door you are standing at
+    } else if ((k === '1' || k === '2') && cameraMode === 'follow') {
+      weaponQueued = k === '1' ? 1 : 2; // take out the pistol / the shotgun
     } else if (k === 'v') setCameraMode(cameraMode === 'follow' ? 'free' : 'follow');
     else if (k === 'l') flashlightPref = flashlightOn() ? 'off' : 'on';
     else if (k === 't' && tower) {
@@ -959,8 +976,12 @@ export async function createCityScene(
           ammo: e.ammo,
           health: e.health,
           armory: e.armory,
+          shotgun: e.shotgun,
           place: gameWorld.places[e.place].name,
         });
+        break;
+      case 'weapon':
+        notices.emit({ type: 'weapon', weapon: e.weapon });
         break;
       case 'radar':
         notices.emit({ type: 'radar', place: gameWorld.places[e.place].name });
@@ -1067,6 +1088,7 @@ export async function createCityScene(
     pickupMarkers = createPickupMarkers(game.pickups);
     scene.add(pickupMarkers.object);
     reloadQueued = shoveQueued = interactQueued = false;
+    weaponQueued = 0;
     simClock = 0;
     goal = cameraMode === 'follow' ? recentred() : { ...home };
     easeRate = Math.max(easeRate, 10);
@@ -1119,6 +1141,7 @@ export async function createCityScene(
       reload: reloadQueued,
       shove: shoveQueued,
       interact: interactQueued,
+      weapon: weaponQueued,
     };
     simClock = debugFrozen ? 0 : simClock + dt;
     let steps = 0;
@@ -1130,7 +1153,11 @@ export async function createCityScene(
       input.reload = false;
       input.shove = false;
       input.interact = false;
-      if (steps === 0) reloadQueued = shoveQueued = interactQueued = false;
+      input.weapon = 0;
+      if (steps === 0) {
+        reloadQueued = shoveQueued = interactQueued = false;
+        weaponQueued = 0;
+      }
       for (const e of drainEvents(game)) handleEvent(e);
       simClock -= SIM_STEP;
       steps++;
@@ -1349,10 +1376,12 @@ export async function createCityScene(
         camera: cameraMode,
         phase: game.status,
         health: game.health,
+        weapon: game.weapon,
+        hasShotgun: game.hasShotgun,
         ammo: game.ammo,
-        magazine: GAME.weapon.mag,
+        magazine: weaponConfig(game.weapon).mag,
         reserve: game.reserve,
-        reloading: game.reloading > 0 ? 1 - game.reloading / GAME.weapon.reload : 0,
+        reloading: game.reloading > 0 ? 1 - game.reloading / weaponConfig(game.weapon).reload : 0,
         shove: 1 - game.shoveCooldown / GAME.shove.cooldown,
         time: game.time,
         rescueIn: rescueIn(game),

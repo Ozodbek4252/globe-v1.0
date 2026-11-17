@@ -72,6 +72,25 @@ export const GAME = {
     moveSpread: 0.04,
     sprintSpread: 0.12,
     hitRadius: 0.42,
+    pellets: 1,
+    /** How far a shot carries (metres). */
+    noise: 60,
+  },
+  /** The armory's gun: eight pellets in a wide cone, deadly close up, weak and loud at range, slow to reload. */
+  shotgun: {
+    mag: 6,
+    reserve: 12,
+    reserveCap: 40,
+    reload: 2.6,
+    interval: 0.85,
+    damage: 28,
+    range: 16,
+    spread: 0.12,
+    moveSpread: 0.03,
+    sprintSpread: 0.2,
+    hitRadius: 0.42,
+    pellets: 8,
+    noise: 75,
   },
   shove: {
     cooldown: 1.6,
@@ -84,7 +103,6 @@ export const GAME = {
   noise: {
     walk: 5,
     sprint: 16,
-    shot: 60,
     shove: 8,
     walkEvery: 0.55,
     sprintEvery: 0.35,
@@ -131,6 +149,30 @@ export const GAME = {
 
 export type GameStatus = 'playing' | 'won' | 'lost';
 
+export type WeaponName = 'pistol' | 'shotgun';
+
+/** The numbers that make one gun different from another. */
+export interface WeaponConfig {
+  mag: number;
+  reserve: number;
+  reserveCap: number;
+  reload: number;
+  interval: number;
+  damage: number;
+  range: number;
+  spread: number;
+  moveSpread: number;
+  sprintSpread: number;
+  hitRadius: number;
+  pellets: number;
+  noise: number;
+}
+
+/** The configuration of the gun in hand. */
+export function weaponConfig(name: WeaponName): WeaponConfig {
+  return name === 'shotgun' ? GAME.shotgun : GAME.weapon;
+}
+
 export interface Pickup {
   x: number;
   y: number;
@@ -155,8 +197,10 @@ export type GameEvent =
   | { type: 'empty' }
   | { type: 'shove'; x: number; y: number; heading: number }
   | { type: 'pickup'; kind: 'ammo' | 'medkit'; x: number; y: number }
-  /** A shop, clinic or armory was searched: what it gave. */
-  | { type: 'loot'; place: number; ammo: number; health: number; armory: boolean }
+  /** A shop, clinic or armory was searched: what it gave (`shotgun` when it was the armory's gun). */
+  | { type: 'loot'; place: number; ammo: number; health: number; armory: boolean; shotgun: boolean }
+  /** The gun in hand changed. */
+  | { type: 'weapon'; weapon: WeaponName }
   /** The radar is on: the survivor can see the horde now. */
   | { type: 'radar'; place: number }
   | { type: 'enter'; place: number }
@@ -191,6 +235,8 @@ export interface GameInput {
   reload: boolean;
   shove: boolean;
   interact: boolean;
+  /** Take out a gun: 1 the pistol, 2 the shotgun (once found); 0 for no change. Sent once per press. */
+  weapon: 0 | 1 | 2;
 }
 
 export const NO_INPUT: GameInput = {
@@ -202,6 +248,7 @@ export const NO_INPUT: GameInput = {
   reload: false,
   shove: false,
   interact: false,
+  weapon: 0,
 };
 
 /**
@@ -259,8 +306,14 @@ export interface GameState {
   health: number;
   /** Seconds since last hurt. */
   sinceHurt: number;
+  /** The gun in hand, and its magazine and spare rounds. */
+  weapon: WeaponName;
   ammo: number;
   reserve: number;
+  /** The shotgun has been found. */
+  hasShotgun: boolean;
+  /** The magazine and spare rounds of the gun that is not in hand. */
+  stash: { ammo: number; reserve: number };
   /** Seconds of reloading left; 0 when not reloading. */
   reloading: number;
   fireCooldown: number;
@@ -329,8 +382,11 @@ export function createGame(world: GameWorld, options: GameOptions): GameState {
     player: createPlayer(options.startX, options.startY),
     health: GAME.health,
     sinceHurt: 99,
+    weapon: 'pistol',
     ammo: GAME.weapon.mag,
     reserve: GAME.weapon.reserve,
+    hasShotgun: false,
+    stash: { ammo: 0, reserve: 0 },
     reloading: 0,
     fireCooldown: 0,
     shoveCooldown: 0,
@@ -701,6 +757,31 @@ function breach(g: GameState, world: GameWorld, id: number): void {
   }
 }
 
+/** Take out the other gun. The magazine and spare rounds of each stay with it. */
+function switchWeapon(g: GameState, to: WeaponName): void {
+  if (to === g.weapon || (to === 'shotgun' && !g.hasShotgun)) return;
+  g.reloading = 0; // a half-done reload is lost
+  [g.ammo, g.stash.ammo] = [g.stash.ammo, g.ammo];
+  [g.reserve, g.stash.reserve] = [g.stash.reserve, g.reserve];
+  g.weapon = to;
+  g.fireCooldown = 0.4; // a moment to bring it up
+  emit(g, { type: 'weapon', weapon: to });
+}
+
+/** Spare rounds for a gun, in hand or not. */
+function reserveOf(g: GameState, which: WeaponName): number {
+  return which === g.weapon ? g.reserve : g.stash.reserve;
+}
+
+/** Add spare rounds to a gun (in hand or not), up to what it can carry. Returns how many went in. */
+function addReserve(g: GameState, which: WeaponName, rounds: number): number {
+  const room = weaponConfig(which).reserveCap - reserveOf(g, which);
+  const added = Math.max(0, Math.min(rounds, room));
+  if (which === g.weapon) g.reserve += added;
+  else g.stash.reserve += added;
+  return added;
+}
+
 function stepWeapon(
   g: GameState,
   input: GameInput,
@@ -708,7 +789,8 @@ function stepWeapon(
   colliders: Colliders,
   dt: number,
 ): void {
-  const w = GAME.weapon;
+  if (input.weapon !== 0) switchWeapon(g, input.weapon === 2 ? 'shotgun' : 'pistol');
+  const w = weaponConfig(g.weapon);
   // reloading
   if (g.reloading > 0) {
     g.reloading -= dt;
@@ -739,51 +821,61 @@ function stepWeapon(
 }
 
 function fireShot(g: GameState, aimAngle: number, colliders: Colliders): void {
-  const w = GAME.weapon;
+  const w = weaponConfig(g.weapon);
   const { player: p, horde: h, rng } = g;
   const moving = Math.min(1, speedOf(p) / PLAYER.walkSpeed);
   const spread = p.sprinting ? w.sprintSpread : w.spread + w.moveSpread * moving;
-  const angle = aimAngle + (nextFloat(rng) - nextFloat(rng)) * spread;
-  const dx = Math.cos(angle);
-  const dy = Math.sin(angle);
 
-  let reach: number = w.range;
-  let hit: 'zombie' | 'wall' | 'none' = 'none';
-  const wall = rayWallHit(colliders, p.x, p.y, p.x + dx * w.range, p.y + dy * w.range);
-  if (wall !== Infinity) {
-    reach = wall * w.range;
-    hit = 'wall';
-  }
-  let target = -1;
-  for (let i = 0; i < h.used; i++) {
-    if (!isAlive(h, i)) continue;
-    const ox = h.x[i] - p.x;
-    const oy = h.y[i] - p.y;
-    const along = ox * dx + oy * dy;
-    if (along < -1 || along > reach + 1) continue;
-    const across = Math.abs(ox * dy - oy * dx);
-    if (across > w.hitRadius + 0.3) continue;
-    const t = rayCircleHit(p.x, p.y, dx, dy, h.x[i], h.y[i], w.hitRadius);
-    if (t <= reach) {
-      reach = t;
-      target = i;
-      hit = 'zombie';
+  let anyHit = false;
+  // a pistol round wanders a little off the aim; shotgun pellets fan out across the whole cone
+  for (let k = 0; k < w.pellets; k++) {
+    const wander =
+      w.pellets === 1
+        ? (nextFloat(rng) - nextFloat(rng)) * spread
+        : (nextFloat(rng) * 2 - 1) * spread;
+    const angle = aimAngle + wander;
+    const dx = Math.cos(angle);
+    const dy = Math.sin(angle);
+
+    let reach: number = w.range;
+    let hit: 'zombie' | 'wall' | 'none' = 'none';
+    const wall = rayWallHit(colliders, p.x, p.y, p.x + dx * w.range, p.y + dy * w.range);
+    if (wall !== Infinity) {
+      reach = wall * w.range;
+      hit = 'wall';
+    }
+    let target = -1;
+    for (let i = 0; i < h.used; i++) {
+      if (!isAlive(h, i)) continue;
+      const ox = h.x[i] - p.x;
+      const oy = h.y[i] - p.y;
+      const along = ox * dx + oy * dy;
+      if (along < -1 || along > reach + 1) continue;
+      const across = Math.abs(ox * dy - oy * dx);
+      if (across > w.hitRadius + 0.3) continue;
+      const t = rayCircleHit(p.x, p.y, dx, dy, h.x[i], h.y[i], w.hitRadius);
+      if (t <= reach) {
+        reach = t;
+        target = i;
+        hit = 'zombie';
+      }
+    }
+    const endX = p.x + dx * reach;
+    const endY = p.y + dy * reach;
+    emit(g, { type: 'shot', x: p.x, y: p.y, endX, endY, hit });
+    if (target >= 0) {
+      anyHit = true;
+      const killed = damageZombie(h, target, w.damage, p.x, p.y);
+      if (killed) g.stats.kills++;
+      emit(g, { type: 'hit', x: endX, y: endY, kill: killed });
     }
   }
-  const endX = p.x + dx * reach;
-  const endY = p.y + dy * reach;
-  emit(g, { type: 'shot', x: p.x, y: p.y, endX, endY, hit });
-  addNoise(g, p.x, p.y, GAME.noise.shot, GAME.noise.shotTtl);
-  emit(g, { type: 'noise', x: p.x, y: p.y, radius: GAME.noise.shot });
+  addNoise(g, p.x, p.y, w.noise, GAME.noise.shotTtl);
+  emit(g, { type: 'noise', x: p.x, y: p.y, radius: w.noise });
   g.stats.shots++;
+  if (anyHit) g.stats.hits++;
   g.ammo--;
   g.fireCooldown = w.interval;
-  if (target >= 0) {
-    g.stats.hits++;
-    const killed = damageZombie(h, target, w.damage, p.x, p.y);
-    if (killed) g.stats.kills++;
-    emit(g, { type: 'hit', x: endX, y: endY, kill: killed });
-  }
   if (g.ammo === 0 && g.reserve > 0) {
     g.reloading = w.reload;
     emit(g, { type: 'reload' });
@@ -826,8 +918,9 @@ function collectPickups(g: GameState): void {
     const dy = pick.y - p.y;
     if (dx * dx + dy * dy > r2) continue;
     if (pick.kind === 'ammo') {
-      if (g.reserve >= GAME.weapon.reserveCap) continue; // leave it for later
-      g.reserve = Math.min(GAME.weapon.reserveCap, g.reserve + GAME.pickups.ammoAmount);
+      // pistol rounds, whichever gun is in hand
+      if (reserveOf(g, 'pistol') >= GAME.weapon.reserveCap) continue; // leave it for later
+      addReserve(g, 'pistol', GAME.pickups.ammoAmount);
     } else {
       if (g.health >= GAME.health) continue;
       g.health = Math.min(GAME.health, g.health + GAME.pickups.medkitAmount);
@@ -900,18 +993,34 @@ function interact(g: GameState, world: GameWorld): boolean {
     return true;
   }
   // supplies and the armory: something to take
+  if (place.kind === 'armory') {
+    // the armory's gun, with its shells, and pistol rounds besides
+    const gotAmmo = addReserve(g, 'pistol', GAME.loot.ammo);
+    g.hasShotgun = true;
+    // (it starts loaded: until you take it out, its magazine and spare shells wait in the stash)
+    g.stash.ammo = g.weapon === 'shotgun' ? g.stash.ammo : GAME.shotgun.mag;
+    addReserve(g, 'shotgun', GAME.shotgun.reserve);
+    g.used[place.id] = true;
+    emit(g, {
+      type: 'loot',
+      place: place.id,
+      ammo: gotAmmo,
+      health: 0,
+      armory: true,
+      shotgun: true,
+    });
+    return true;
+  }
   let ammo = 0;
   let health = 0;
   const roll = nextFloat(g.rng);
-  if (place.kind === 'armory') ammo = GAME.loot.ammo * 2;
-  else if (roll < GAME.loot.both) {
+  if (roll < GAME.loot.both) {
     ammo = Math.round(GAME.loot.ammo / 2);
     health = Math.round(GAME.loot.health / 2);
   } else if (roll < 0.6) ammo = GAME.loot.ammo;
   else health = GAME.loot.health;
-  const gotAmmo = Math.min(ammo, GAME.weapon.reserveCap - g.reserve);
+  const gotAmmo = addReserve(g, 'pistol', ammo);
   const gotHealth = Math.min(health, GAME.health - g.health);
-  g.reserve += gotAmmo;
   g.health += gotHealth;
   // with nothing useful to take (full pack, full health) the place is left as it was, for later
   g.used[place.id] = gotAmmo > 0 || gotHealth > 0;
@@ -920,7 +1029,8 @@ function interact(g: GameState, world: GameWorld): boolean {
     place: place.id,
     ammo: gotAmmo,
     health: Math.round(gotHealth),
-    armory: place.kind === 'armory',
+    armory: false,
+    shotgun: false,
   });
   return true;
 }

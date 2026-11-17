@@ -269,7 +269,10 @@ onBeforeUnmount(() => {
       <ul class="city-help" aria-label="Controls">
         <template v-if="!player || player.camera === 'follow'">
           <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk &nbsp; <kbd>Shift</kbd> run</li>
-          <li><kbd>Mouse</kbd> aim &nbsp; <kbd>Click</kbd> fire &nbsp; <kbd>R</kbd> reload</li>
+          <li>
+            <kbd>Mouse</kbd> aim &nbsp; <kbd>Click</kbd> fire &nbsp; <kbd>R</kbd> reload &nbsp;
+            <kbd>1</kbd><kbd>2</kbd> gun
+          </li>
           <li>
             <kbd>Space</kbd> shove &nbsp; <kbd>F</kbd> use a door &nbsp; <kbd>L</kbd> flashlight
           </li>

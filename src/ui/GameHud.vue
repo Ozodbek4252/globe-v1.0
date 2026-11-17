@@ -76,13 +76,20 @@ function push(n: GameNotice): void {
       const got = [n.ammo > 0 ? `+${n.ammo} rounds` : '', n.health > 0 ? `+${n.health} health` : '']
         .filter(Boolean)
         .join(' · ');
-      toast.value = { id, text: got || 'Nothing here you can use right now' };
-      announcement.value = got
-        ? `${n.place}: ${got}.`
-        : `${n.place}: nothing you can use right now.`;
-      later(() => toast.value?.id === id && (toast.value = null), 2200);
+      const text = n.shotgun
+        ? `Shotgun found · press 2${got ? ' · ' + got : ''}`
+        : got || 'Nothing here you can use right now';
+      toast.value = { id, text };
+      announcement.value = n.shotgun
+        ? `${n.place}: a shotgun and shells. Press 2 to take it out.`
+        : got
+          ? `${n.place}: ${got}.`
+          : `${n.place}: nothing you can use right now.`;
+      later(() => toast.value?.id === id && (toast.value = null), n.shotgun ? 3600 : 2200);
       break;
     }
+    case 'weapon':
+      break; // the ammo panel already shows it
     case 'enter':
       toast.value = { id, text: 'Safe for now. The door will not hold forever.' };
       announcement.value = `Inside ${n.place}. Rest here, but watch the door.`;
@@ -263,7 +270,12 @@ const accuracy = computed(() =>
       <div v-if="toast" :key="toast.id" class="hud-toast">{{ toast.text }}</div>
 
       <div v-if="player.camera === 'follow'" class="hud-ammo" :class="{ low: ammoLow }">
-        <span class="hud-label">Pistol</span>
+        <span class="hud-label"
+          >{{ player.weapon === 'shotgun' ? 'Shotgun' : 'Pistol'
+          }}<template v-if="player.hasShotgun">
+            · <kbd class="hud-weapon-key">1</kbd><kbd class="hud-weapon-key">2</kbd></template
+          ></span
+        >
         <span class="hud-rounds"
           ><b>{{ player.ammo }}</b
           ><i> / {{ player.reserve }}</i></span
@@ -662,6 +674,15 @@ const accuracy = computed(() =>
   border: 1px solid #2b3956;
   background: #0f1729;
   font: 500 9px var(--f-mono);
+}
+.hud-weapon-key {
+  margin-left: 3px;
+  padding: 0 5px;
+  border-radius: 3px;
+  border: 1px solid #2b3956;
+  background: #0f1729;
+  font: 500 10px var(--f-mono);
+  color: var(--ink);
 }
 .hud-empty {
   font: 600 12px var(--f-mono);

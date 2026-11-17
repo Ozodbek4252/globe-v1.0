@@ -598,13 +598,19 @@ describe('places', () => {
     expect(g.used[place('supplies').id]).toBe(true);
   });
 
-  it('the armory gives a lot of ammunition', () => {
-    const { g, run, goTo, events } = district();
+  it('the armory gives a shotgun and shells, and some pistol rounds, once', () => {
+    const { g, run, goTo, events, place } = district();
     g.reserve = 0;
+    expect(g.hasShotgun).toBe(false);
     goTo('armory');
     run({ interact: true }, DT);
-    expect(g.reserve).toBe(GAME.loot.ammo * 2);
-    expect(events.find((e) => e.type === 'loot')).toMatchObject({ armory: true });
+    expect(g.hasShotgun).toBe(true);
+    expect(g.reserve).toBe(GAME.loot.ammo); // pistol rounds
+    expect(g.stash).toEqual({ ammo: GAME.shotgun.mag, reserve: GAME.shotgun.reserve });
+    expect(events.find((e) => e.type === 'loot')).toMatchObject({ armory: true, shotgun: true });
+    expect(g.used[place('armory').id]).toBe(true);
+    run({ interact: true }, DT);
+    expect(g.stash.reserve).toBe(GAME.shotgun.reserve); // not a second helping
   });
 
   it('is shut to the dead', () => {
@@ -961,5 +967,132 @@ describe('survivors', () => {
       ].join('|');
     };
     expect(play()).toBe(play());
+  });
+});
+
+describe('the shotgun', () => {
+  /** A district game with the shotgun already found and in hand. */
+  const armed = (options: Partial<GameOptions> = {}) => {
+    const t = district(options);
+    t.goTo('armory');
+    t.run({ interact: true }, DT);
+    t.g.player = { ...t.g.player, x: 0, y: 0 };
+    t.run({ weapon: 2 }, 0.6); // take it out, and wait out the moment it takes to bring up
+    return t;
+  };
+
+  it('stays in the armory until you find it', () => {
+    const { g, run, count } = district();
+    run({ weapon: 2 }, 0.5);
+    expect(g.weapon).toBe('pistol');
+    expect(count('weapon')).toBe(0);
+  });
+
+  it('can be taken out and put away, each gun keeping its own magazine and spare rounds', () => {
+    const { g, run, count } = armed();
+    expect(g.weapon).toBe('shotgun');
+    expect(g.ammo).toBe(GAME.shotgun.mag);
+    expect(g.reserve).toBe(GAME.shotgun.reserve);
+    expect(g.stash.ammo).toBe(GAME.weapon.mag); // the pistol, as it was
+    expect(count('weapon')).toBe(1);
+    g.ammo = 3;
+    g.stash.ammo = 9;
+    g.stash.reserve = 77;
+    run({ weapon: 1 }, 0.6);
+    expect(g.weapon).toBe('pistol');
+    expect([g.ammo, g.reserve]).toEqual([9, 77]);
+    expect(g.stash.ammo).toBe(3);
+    run({ weapon: 1 }, 0.1); // already in hand: nothing happens
+    expect(count('weapon')).toBe(2);
+  });
+
+  it('takes a moment to bring up, and drops a half-done reload', () => {
+    const { g, run } = armed();
+    g.ammo = 2;
+    run({ reload: true }, 0.5);
+    expect(g.reloading).toBeGreaterThan(0);
+    run({ weapon: 1 }, DT);
+    expect(g.reloading).toBe(0);
+    const shots = g.stats.shots;
+    run({ fire: true, aim: [30, 0] }, 0.2); // too soon after switching
+    expect(g.stats.shots).toBe(shots);
+    run({ fire: true, aim: [30, 0] }, 0.5);
+    expect(g.stats.shots).toBeGreaterThan(shots);
+  });
+
+  it('fires a spread of pellets in one pull, and kills a walker close up in one blast', () => {
+    const { g, run, still, events } = armed();
+    const z = still(3, 0);
+    run({ fire: true, aim: [30, 0] }, DT);
+    expect(events.filter((e) => e.type === 'shot')).toHaveLength(GAME.shotgun.pellets);
+    expect(g.stats.shots).toBe(1);
+    expect(g.ammo).toBe(GAME.shotgun.mag - 1);
+    expect(g.horde.state[z]).toBe(ZState.DEAD);
+    expect(g.stats.kills).toBe(1);
+  });
+
+  it('is weak at long range, and useless beyond it', () => {
+    const near = armed();
+    const a = near.still(3, 0);
+    near.run({ fire: true, aim: [30, 0] }, DT);
+    const far = armed();
+    const b = far.still(14, 0);
+    far.run({ fire: true, aim: [30, 0] }, DT);
+    expect(far.g.horde.health[b]).toBeGreaterThan(near.g.horde.health[a]); // hurt far less than at 3 m
+    const out = armed();
+    const c = out.still(20, 0);
+    out.run({ fire: true, aim: [30, 0] }, DT);
+    expect(out.g.horde.health[c]).toBe(100);
+  });
+
+  it('is stopped by a wall like any bullet', () => {
+    const walled = setup({ buildings: [{ outer: sq(4, -5, 1, 10) }] });
+    walled.g.weapon = 'shotgun';
+    walled.g.ammo = 6;
+    const z = walled.still(8, 0);
+    walled.run({ fire: true, aim: [30, 0] }, DT);
+    expect(walled.g.horde.health[z]).toBe(100);
+  });
+
+  it('is slow: under one shot a second', () => {
+    const { g, run } = armed();
+    const before = g.stats.shots;
+    run({ fire: true, aim: [30, 0] }, 3);
+    expect(g.stats.shots - before).toBe(Math.ceil(3 / GAME.shotgun.interval)); // 4: at 0, 0.85, 1.7, 2.55 s
+  });
+
+  it('is louder than the pistol: it carries past where a pistol shot would stop', () => {
+    const shotgun = armed();
+    const z1 = shotgun.still(70, 0);
+    shotgun.g.horde.heading[z1] = 0;
+    shotgun.run({ fire: true, aim: [-30, 0] }, 0.5);
+    expect(shotgun.g.horde.state[z1]).toBe(ZState.INVESTIGATE);
+
+    const pistol = district();
+    pistol.g.player = { ...pistol.g.player, x: 0, y: 0 };
+    const z2 = pistol.still(70, 0);
+    pistol.g.horde.heading[z2] = 0;
+    pistol.run({ fire: true, aim: [-30, 0] }, 0.5);
+    expect(pistol.g.horde.state[z2]).toBe(ZState.WANDER);
+  });
+
+  it('reloads slowly, taking shells from its own reserve', () => {
+    const { g, run } = armed();
+    g.ammo = 1;
+    run({ reload: true }, 2);
+    expect(g.ammo).toBe(1);
+    run({}, 0.8);
+    expect(g.ammo).toBe(GAME.shotgun.mag);
+    expect(g.reserve).toBe(GAME.shotgun.reserve - (GAME.shotgun.mag - 1));
+  });
+
+  it('does not use up pistol rounds, and ground ammunition still goes to the pistol', () => {
+    const { g, run } = armed();
+    const stash = g.stash.reserve;
+    g.pickups = [{ x: 0.5, y: 0, kind: 'ammo', taken: false }];
+    run({}, 0.2);
+    expect(g.pickups[0].taken).toBe(true);
+    expect(g.stash.reserve).toBe(stash + GAME.pickups.ammoAmount); // the pistol's, in the stash
+    expect(g.reserve).toBeLessThanOrEqual(GAME.shotgun.reserve); // the shotgun's, untouched
   });
 });
