@@ -211,6 +211,22 @@ describe('losing the trail', () => {
     expect(h.state[i]).not.toBe(ZState.CHASE);
   });
 
+  it('a survivor who ducks out of sight is not tracked: the zombie goes to where they were last seen, then gives up', () => {
+    const { run } = arena({ buildings: [{ outer: sq(-30, 15, 60, 3) }] });
+    const h = createHorde(2, 1);
+    const i = standing(h, 10, 0, Math.PI);
+    run(h, 0, 0, 0.6);
+    expect(h.state[i]).toBe(ZState.CHASE);
+    // the survivor is suddenly behind the long wall, out of sight, 40 m off
+    run(h, 0, 40, 2);
+    expect(h.state[i]).toBe(ZState.CHASE); // still on the scent for a moment
+    run(h, 0, 40, 10);
+    expect(h.state[i]).not.toBe(ZState.CHASE);
+    // it went to the spot it last saw them in, and did not follow the way round the wall
+    expect(Math.hypot(h.x[i] - 0, h.y[i] - 0)).toBeLessThan(12);
+    expect(h.y[i]).toBeLessThan(14);
+  });
+
   it('a zombie sent hunting that never saw anyone drifts off instead of heading for nowhere', () => {
     const { run } = arena();
     const h = createHorde(2, 1);

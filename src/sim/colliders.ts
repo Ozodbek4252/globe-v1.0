@@ -206,6 +206,35 @@ function closestOnSegment(
 
 const nearest: [number, number] = [0, 0];
 
+/** Whether the straight path from one point to another crosses any wall (a short path: only the walls near it are checked). */
+function crossesWall(c: Colliders, x0: number, y0: number, x1: number, y1: number): boolean {
+  const cx = Math.floor(((x0 + x1) / 2 - c.origin) / c.cell);
+  const cy = Math.floor(((y0 + y1) / 2 - c.origin) / c.cell);
+  const stamp = ++c.stamp.value;
+  for (let gy = Math.max(0, cy - 1); gy <= Math.min(c.cols - 1, cy + 1); gy++) {
+    for (let gx = Math.max(0, cx - 1); gx <= Math.min(c.cols - 1, cx + 1); gx++) {
+      const cell = gy * c.cols + gx;
+      for (let k = c.segStart[cell]; k < c.segStart[cell + 1]; k++) {
+        const s = c.segItems[k];
+        if (c.seenSeg[s] === stamp) continue;
+        c.seenSeg[s] = stamp;
+        const ax = c.segments[s * 4];
+        const ay = c.segments[s * 4 + 1];
+        const bx = c.segments[s * 4 + 2];
+        const by = c.segments[s * 4 + 3];
+        // the two ends of each are on opposite sides of the other
+        const d1 = (bx - ax) * (y0 - ay) - (by - ay) * (x0 - ax);
+        const d2 = (bx - ax) * (y1 - ay) - (by - ay) * (x1 - ax);
+        if (d1 * d2 >= 0) continue;
+        const d3 = (x1 - x0) * (ay - y0) - (y1 - y0) * (ax - x0);
+        const d4 = (x1 - x0) * (by - y0) - (y1 - y0) * (bx - x0);
+        if (d3 * d4 < 0) return true;
+      }
+    }
+  }
+  return false;
+}
+
 /**
  * Push a circle of radius `r` out of every wall and round obstacle it overlaps. Returns the corrected
  * centre. A few passes settle corners and gaps where two pushes fight.
@@ -343,8 +372,16 @@ export function moveCircle(
     Math.max(-limit, Math.min(limit, x)),
     Math.max(-limit, Math.min(limit, y)),
   ];
-  const [rx, ry] = resolveCircle(c, ...clampPoint(toX, toY), r);
+  const [targetX, targetY] = clampPoint(toX, toY);
+  const [rx, ry] = resolveCircle(c, targetX, targetY, r);
   const [x, y] = clampPoint(rx, ry);
+  // Wedged in a gap too narrow for the body (a funnel between two buildings, say), the body already
+  // overlaps a wall, so a step can end beyond it; and the pushes of the walls cannot all be answered,
+  // so what comes out is a compromise that can be on the far side. A body never crosses a wall: such a
+  // move is refused. (Only a step that touched something needs checking; most in open ground do not.)
+  if (Math.hypot(rx - targetX, ry - targetY) > 1e-6 && crossesWall(c, fromX, fromY, x, y)) {
+    return [fromX, fromY];
+  }
   if (!inWater(c, x, y, r) || inWater(c, fromX, fromY, r)) return [x, y]; // a person already in water may wade out
   // water ahead: slide along the shore on whichever axis is still free
   const alongX = clampPoint(resolveCircle(c, toX, fromY, r)[0], fromY);
@@ -357,6 +394,30 @@ export function moveCircle(
   if (freeX) return alongX;
   if (freeY) return alongY;
   return [fromX, fromY];
+}
+
+/**
+ * `moveCircle` for a move of any length: split into pieces shorter than the circle's radius, so that
+ * something moving fast (or in a long coarse time step) cannot step through a wall.
+ */
+export function moveCircleLong(
+  c: Colliders,
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  r: number,
+): [number, number] {
+  const distance = Math.hypot(toX - fromX, toY - fromY);
+  const pieces = Math.ceil(distance / (r * 0.8));
+  if (pieces <= 1) return moveCircle(c, fromX, fromY, toX, toY, r);
+  const stepX = (toX - fromX) / pieces;
+  const stepY = (toY - fromY) / pieces;
+  let x = fromX;
+  let y = fromY;
+  // each piece starts from where the last one ended (a blocked piece leaves it short of the line)
+  for (let k = 0; k < pieces; k++) [x, y] = moveCircle(c, x, y, x + stepX, y + stepY, r);
+  return [x, y];
 }
 
 /**

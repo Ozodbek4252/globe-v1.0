@@ -6,9 +6,11 @@ import {
   inWater,
   insideBuilding,
   moveCircle,
+  moveCircleLong,
   resolveCircle,
   type ColliderSource,
 } from '../src/sim/colliders';
+import { pointInFlatRing } from '../src/sim/grid';
 
 const sq = (x: number, y: number, w: number, h = w): number[] => [
   x,
@@ -129,6 +131,68 @@ describe('round obstacles', () => {
     for (let i = 0; i < 400; i++) [x, y] = moveCircle(t, x, y, x + 0.05, y, 0.4);
     expect(x).toBeGreaterThan(20 + 0.5); // got past it
     expect(Math.hypot(x - 20, y)).toBeGreaterThanOrEqual(0.75 - 1e-3);
+  });
+
+  it('cannot be funnelled through a wall: a gap between two buildings that narrows to nothing', () => {
+    // taken from the real map (moved to fit the test map): two walls 2.4 m apart at one end, 0.14 m at the other
+    const west = [-1.1, -5.9, 0.8, 7.8, -13, 7.8, -13, -5.9];
+    const east = [0.4, 3.7, 1.3, -7.1, 17, -7.1, 17, 3.7];
+    const funnel = world({ buildings: [{ outer: west }, { outer: east }] });
+    const inside = (x: number, y: number): boolean =>
+      pointInFlatRing(west, x, y) || pointInFlatRing(east, x, y);
+    // someone already wedged in the narrow part, pushing in every direction at a runner's pace on a coarse step
+    for (let y0 = -2; y0 <= 3.5; y0 += 0.25) {
+      for (let x0 = -0.4; x0 <= 0.8; x0 += 0.1) {
+        if (inside(x0, y0)) continue;
+        for (let angle = 0; angle < 360; angle += 15) {
+          const a = (angle * Math.PI) / 180;
+          let [x, y] = [x0, y0];
+          for (let i = 0; i < 4; i++) {
+            [x, y] = moveCircleLong(
+              funnel,
+              x,
+              y,
+              x + Math.cos(a) * 0.27,
+              y + Math.sin(a) * 0.27,
+              0.34,
+            );
+            expect(inside(x, y), `from ${x0}, ${y0} heading ${angle}: at ${x}, ${y}`).toBe(false);
+          }
+        }
+      }
+    }
+  });
+
+  it('is never pushed into a building through a razor-thin corner', () => {
+    // a wedge whose tip is much narrower than a body: from the tip's side, pushes from the two walls
+    // can carry a body across to the inside, where the walls then hold it
+    const wedge = world({ buildings: [{ outer: [0, 0, 20, 3, 20, -3] }] });
+    for (let angle = 0; angle < 360; angle += 3) {
+      const a = (angle * Math.PI) / 180;
+      let x = Math.cos(a) * 3;
+      let y = Math.sin(a) * 3;
+      if (insideBuilding(wedge, x, y)) continue;
+      // head for a point just inside the tip, in steps of a runner's pace on a coarse step
+      for (let i = 0; i < 40; i++) {
+        const dx = 1.2 - x;
+        const dy = -y;
+        const d = Math.hypot(dx, dy) || 1;
+        [x, y] = moveCircleLong(wedge, x, y, x + (dx / d) * 0.38, y + (dy / d) * 0.38, 0.34);
+        expect(insideBuilding(wedge, x, y)).toBe(false);
+      }
+    }
+  });
+
+  it('keeps long moves honest too: a coarse step cannot carry a body through a wall or past a tree', () => {
+    const trees = { data: [20, 0], stride: 2, count: 1, radius: 0.35 };
+    const t = world({ buildings: [{ outer: sq(0, 0, 10) }] }, [trees]);
+    // 0.7 m in one go is twice the body's radius
+    let [x, y] = [5, -20];
+    for (let i = 0; i < 60; i++) [x, y] = moveCircleLong(t, x, y, x, y + 0.7, 0.34);
+    expect(y).toBeCloseTo(-0.34, 4);
+    [x, y] = [10, 0.01];
+    for (let i = 0; i < 60; i++) [x, y] = moveCircleLong(t, x, y, x + 0.7, y, 0.34);
+    expect(Math.hypot(x - 20, y)).toBeGreaterThanOrEqual(0.69 - 1e-3);
   });
 
   it('reads trees from interleaved data with a stride', () => {

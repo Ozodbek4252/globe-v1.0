@@ -37,7 +37,6 @@ import {
   drainEvents,
   GAME,
   interactionAt,
-  rescueIn,
   stepGame,
   validSpot,
   weaponConfig,
@@ -48,15 +47,14 @@ import {
   type WeaponName,
 } from '../sim/game';
 import { sendHunting, spawnZombie, ZKind, ZState } from '../sim/horde';
+import { HState, spawnHuman } from '../sim/humans';
 import { speedOf, type PlayerState } from '../sim/player';
-import { CState, countIn } from '../sim/civilians';
 import type { PlaceKind } from '../sim/places';
 import { compassName, screenAngle, screenOffset } from './bearings';
 import { createSurvivor } from './character';
 import { createCutaway, type Cutaway } from './cutaway';
 import { createEffects, type AimMode } from './effects';
 import { openestYaw } from './followYaw';
-import { createHelicopter } from './helicopter';
 import { createPeopleRenderer } from './people';
 import { createPickupMarkers, type PickupMarkers } from './pickups';
 import { createPlaceMarkers } from './placeMarkers';
@@ -140,7 +138,7 @@ export interface PlayerStatus {
   sprinting: boolean;
   flashlight: boolean;
   camera: CameraMode;
-  /** The state of the game: playing, rescued, or dead. */
+  /** The state of the game: playing, or dead. */
   phase: GameStatus;
   /** 0 to 100. */
   health: number;
@@ -161,35 +159,22 @@ export interface PlayerStatus {
   reloading: number;
   /** 1 when the shove is ready, rising from 0 as it recharges. */
   shove: number;
-  /** Seconds survived, seconds until the helicopter lands, and the length of the whole game. */
+  /** Seconds survived. */
   time: number;
-  rescueIn: number;
-  rescueTotal: number;
-  /** The helicopter has been heard: the horde is coming for the survivor. */
-  inbound: boolean;
   kills: number;
-  /** The number of the latest wave (0 before the first). */
-  wave: number;
-  /** Zombies standing anywhere, and zombies within 40 m. */
+  /** Zombies standing in the streets, and zombies within 40 m. */
   zombies: number;
   near: number;
+  /** The city's people now: well, bitten and turning, turned (in the streets and indoors), and at the start. */
+  population: { healthy: number; bitten: number; zombies: number; initial: number };
   /** What the survivor could do at the door they are standing at (null when not at one). */
   prompt: { label: string; name: string } | null;
-  /** The radar is on: the minimap and the wave warning are available. */
+  /** The radar is on: the minimap is available. */
   radarOn: boolean;
   /** The next goal, how far off it is, and where it lies on the screen (radians clockwise from up). */
   objective: { text: string; distance: number; angle: number; compass: string } | null;
   /** Which shelter the survivor is hiding in, and how much of its door is left (0 to 1); null outdoors. */
   inside: { name: string; door: number } | null;
-  /** The people to save: with you now, safe behind a door, still hiding, lost, saved, and all of them. */
-  survivors: {
-    following: number;
-    sheltered: number;
-    hiding: number;
-    lost: number;
-    saved: number;
-    total: number;
-  };
 }
 
 /** The radar's view of the world, centred on the survivor with "up" ahead of the camera. */
@@ -199,20 +184,13 @@ export interface RadarFrame {
   /** Zombies: x (right), y (up) in metres, then 1 if hunting or striking, else 0: flat triples. */
   zombies: Float32Array;
   places: { kind: PlaceKind; x: number; y: number; used: boolean }[];
-  /** People: x, y, then 1 if with the survivor, 0 if still hiding: flat triples. */
-  people: Float32Array;
-  /** Where the helicopter will land, once it has been heard. */
-  landing: { x: number; y: number } | null;
   /** Where north is on the scope, and which way the survivor faces: radians clockwise from up. */
   north: number;
   heading: number;
-  /** The next wave: seconds until it, which way it comes from on the scope, and how many. */
-  wave: { seconds: number; angle: number; size: number } | null;
 }
 
 /** Things that happen in the game that the HUD wants to flash up. Angles are clockwise from screen-up. */
 export type GameNotice =
-  | { type: 'wave'; number: number; size: number; compass: string; angle: number }
   | { type: 'hurt'; amount: number; angle: number }
   | { type: 'pickup'; kind: 'ammo' | 'medkit' | 'food' }
   /** A shop, clinic or armory was searched (all zero when there was nothing you could use). */
@@ -229,35 +207,31 @@ export type GameNotice =
   | { type: 'weapon'; weapon: WeaponName }
   | { type: 'radar'; place: string }
   | { type: 'enter'; place: string }
-  | { type: 'breach'; place: string; lost: number }
-  | { type: 'recruit'; following: number }
-  | { type: 'sheltered'; count: number; place: string }
-  | { type: 'civilianDown' }
-  | { type: 'rescue'; seconds: number }
+  | { type: 'breach'; place: string }
   /** A new game has begun: forget everything announced. */
   | { type: 'restart' }
   | {
       type: 'over';
-      won: boolean;
+      /** Seconds survived. */
       time: number;
       kills: number;
       shots: number;
       hits: number;
       damageTaken: number;
-      waves: number;
-      /** People saved, lost, and in all. */
-      saved: number;
-      lost: number;
-      total: number;
+      /** How many of the city's people were still well when the survivor fell, and how many there were. */
+      healthy: number;
+      initial: number;
     };
 
 /** Levers for staging scenes (screenshots, tests). Only present when the scene is made with `debug: true`. */
 export interface CityDebug {
   /** Put up to `count` zombies around the survivor, `distance` metres out. Returns how many were placed. */
   spawn(count: number, distance: number, hunting: boolean): number;
-  /** Bring up to `count` survivors to the survivor's side as followers. Returns how many came. */
-  callPeople(count: number): number;
-  /** Where everyone is, and what they are doing (a CState number). */
+  /** Put up to `count` ordinary people in the street around the survivor, `distance` metres out. Returns how many were placed. */
+  crowd(count: number, distance: number): number;
+  /** Turn `count` people in the building nearest the survivor (the outbreak starts there). Returns false if no building had anyone. */
+  infect(count: number): boolean;
+  /** Everyone out in the street, and what they are doing (an HState number). */
   people(): { x: number; y: number; state: number }[];
   /** Put the survivor at this spot (city metres). */
   teleport(x: number, y: number): void;
@@ -284,7 +258,6 @@ export interface CityDebug {
     kills: number;
     shots: number;
     time: number;
-    wave: number;
     x: number;
     y: number;
     /** Which way the survivor faces, in radians counter-clockwise from east. */
@@ -295,26 +268,24 @@ export interface CityDebug {
     /** The place id of the shelter the survivor is in (-1 outdoors), and what is left of its door. */
     inside: number;
     door: number;
-    /** Survivors with you, behind a door, still hiding, lost and saved. */
-    following: number;
-    sheltered: number;
-    hiding: number;
-    lost: number;
-    saved: number;
+    /** The city's people: well, bitten, turned; people out in the street; and buildings whose door has been broken. */
+    healthy: number;
+    bitten: number;
+    turned: number;
+    streets: number;
+    broken: number;
   };
 }
 
 /** Setting up a game: all optional (a random game by default). Handy for sharing and for tests. */
 export interface GameSetup {
   seed?: number;
-  /** Seconds until the helicopter lands. */
-  rescueAt?: number;
   /** Groups of zombies in the streets at the start (0 for none). */
   zombies?: number;
-  /** False to switch the waves off. */
-  waves?: boolean;
-  /** How many survivors are hiding around the map (0 for none). */
-  people?: number;
+  /** How many people have turned somewhere in the city to begin with (0 for a calm city). */
+  patients?: number;
+  /** People per square kilometre. The default is the real density of the city. */
+  density?: number;
 }
 
 export interface CityOptions {
@@ -639,8 +610,8 @@ export async function createCityScene(
       : [0, 0];
   const [spawnX, spawnY] = findSpawn(colliders, startNear, 200, options.player ? 1.5 : 5);
 
-  // ---------- the game: the horde, the pistol, supplies, the rescue clock ----------
-  progress(0.82, 'Gathering the horde');
+  // ---------- the game: the city's people, the outbreak, the pistol, supplies ----------
+  progress(0.82, 'Gathering the city');
   const gameWorld = createGameWorld(colliders, [spawnX, spawnY], data.buildings);
   const setup = options.game ?? {};
   let seed = setup.seed ?? Math.floor(Math.random() * 0xffffffff);
@@ -649,10 +620,9 @@ export async function createCityScene(
       seed,
       startX: spawnX,
       startY: spawnY,
-      rescueAt: setup.rescueAt,
       clumps: setup.zombies,
-      waves: setup.waves,
-      civilians: setup.people,
+      patients: setup.patients,
+      density: setup.density,
     });
   let game = newGame();
   let player: PlayerState = game.player;
@@ -664,7 +634,7 @@ export async function createCityScene(
   const zombies = createZombieRenderer(game.horde.capacity);
   own(zombies);
   scene.add(zombies.object);
-  const people = createPeopleRenderer(Math.max(1, game.civilians.count));
+  const people = createPeopleRenderer(Math.max(1, game.humans.capacity));
   own(people);
   scene.add(people.object);
   const effects = createEffects();
@@ -680,11 +650,6 @@ export async function createCityScene(
   own(placeMarkers);
   scene.add(placeMarkers.object);
   const markerSpent: boolean[] = gameWorld.places.map(() => false);
-  const helicopter = createHelicopter();
-  own(helicopter);
-  scene.add(helicopter.object);
-  let helicopterAngle = 0;
-  let helicopterLanding: [number, number] = [spawnX, spawnY];
   let downAmount = 0;
   let gamePhase: GameStatus = 'playing';
   // a flashlight for the dark
@@ -1005,47 +970,18 @@ export async function createCityScene(
         notices.emit({ type: 'enter', place: gameWorld.places[e.place].name });
         break;
       case 'breach':
-        notices.emit({ type: 'breach', place: gameWorld.places[e.place].name, lost: e.lost });
+        notices.emit({ type: 'breach', place: gameWorld.places[e.place].name });
         break;
-      case 'recruit':
-        notices.emit({ type: 'recruit', following: e.following });
-        break;
-      case 'sheltered':
-        notices.emit({ type: 'sheltered', count: e.count, place: gameWorld.places[e.place].name });
-        break;
-      case 'civilianDown':
-        effects.hit(e.x, e.y, true); // blood on the ground where they fell
-        notices.emit({ type: 'civilianDown' });
-        break;
-      case 'wave':
-        notices.emit({
-          type: 'wave',
-          number: e.number,
-          size: e.size,
-          compass: compassName(e.angle),
-          angle: screenAngle(current.yaw, Math.cos(e.angle), Math.sin(e.angle)),
-        });
-        break;
-      case 'rescue': {
-        helicopterAngle = e.angle;
-        helicopterLanding = [e.x, e.y]; // the game says where it will land, and who is saved is decided there
-        notices.emit({ type: 'rescue', seconds: e.seconds });
-        break;
-      }
-      case 'won':
       case 'lost':
         notices.emit({
           type: 'over',
-          won: e.type === 'won',
           time: game.time,
           kills: game.stats.kills,
           shots: game.stats.shots,
           hits: game.stats.hits,
           damageTaken: Math.round(game.stats.damageTaken),
-          waves: game.wave,
-          saved: game.stats.saved,
-          lost: game.stats.lost,
-          total: game.civilians.placed,
+          healthy: game.population.healthy,
+          initial: game.population.initial,
         });
         break;
       default:
@@ -1097,7 +1033,6 @@ export async function createCityScene(
     paused = false;
     downAmount = 0;
     survivor.setDown(0);
-    helicopter.hide();
     effects.clear();
     reloadQueued = shoveQueued = interactQueued = false;
     weaponQueued = 0;
@@ -1231,9 +1166,9 @@ export async function createCityScene(
       -(py + Math.sin(player.heading) * 16),
     );
 
-    // the horde, the supplies, the shots and the rescue
+    // the horde, the people, the supplies and the shots
     zombies.update(game.horde, simDt, current.x, -current.z, current.distance);
-    people.update(game.civilians, now / 1000, current.distance);
+    people.update(game.humans, now / 1000, current.distance, current.x, -current.z);
     pickupMarkers.sync(game.pickups, now / 1000, darkness);
     // a place that is used up, or a shelter whose door has gone, fades
     for (let i = 0; i < markerSpent.length; i++) markerSpent[i] = game.used[i] || game.breached[i];
@@ -1247,19 +1182,6 @@ export async function createCityScene(
       aimMode,
     );
     effects.update(simDt);
-    if (game.inbound && gamePhase !== 'lost') {
-      const along = 1 - rescueIn(game) / GAME.inbound;
-      helicopter.update(
-        clamp(along, 0, 1),
-        helicopterAngle,
-        helicopterLanding[0],
-        helicopterLanding[1],
-        px,
-        py,
-        darkness,
-        dt,
-      );
-    } else helicopter.hide();
 
     if (now - playerAt >= 100) {
       playerAt = now;
@@ -1275,47 +1197,38 @@ export async function createCityScene(
       // what could be done at the door here
       const here = interactionAt(game, gameWorld);
 
-      // the people to save, and who is nearest among those still hiding
-      const cv = game.civilians;
-      let following = 0;
-      let sheltered = 0;
-      let hiding = 0;
-      let nearestHiding = -1;
-      let nearestDistance = Infinity;
-      for (let i = 0; i < cv.count; i++) {
-        const s = cv.state[i];
-        if (s === CState.FOLLOWING) following++;
-        else if (s === CState.SHELTERED) sheltered++;
-        else if (s === CState.HIDING) {
-          hiding++;
-          const d = Math.hypot(cv.x[i] - player.x, cv.y[i] - player.y);
-          if (d < nearestDistance) {
-            nearestDistance = d;
-            nearestHiding = i;
-          }
-        }
-      }
-
-      // the next goal: reach the helicopter, or power up the radar, or find someone
+      // the next goal: power up the radar, then whatever the survivor is short of
       const pointAt = (text: string, x: number, y: number): PlayerStatus['objective'] => ({
         text,
         distance: Math.hypot(x - player.x, y - player.y),
         angle: screenAngle(current.yaw, x - player.x, y - player.y),
         compass: compassName(Math.atan2(y - player.y, x - player.x)),
       });
-      const radarPlace = gameWorld.places.find((p) => p.kind === 'radar');
+      const nearestPlace = (kinds: readonly PlaceKind[]): { x: number; y: number } | null => {
+        let best: { x: number; y: number } | null = null;
+        let bestD = Infinity;
+        for (const p of gameWorld.places) {
+          if (!kinds.includes(p.kind) || game.used[p.id]) continue;
+          const d = Math.hypot(p.x - player.x, p.y - player.y);
+          if (d < bestD) {
+            bestD = d;
+            best = p;
+          }
+        }
+        return best;
+      };
       let objective: PlayerStatus['objective'] = null;
       if (gamePhase === 'playing') {
-        if (game.inbound && game.landing) {
-          objective = pointAt(
-            following > 0 ? 'Bring them to the helicopter' : 'Reach the helicopter',
-            game.landing[0],
-            game.landing[1],
-          );
-        } else if (radarPlace && !game.radarOn) {
+        const radarPlace = gameWorld.places.find((p) => p.kind === 'radar');
+        const lowOnSupplies = game.food < 40 || game.ammo + game.reserve < 12 || game.health < 40;
+        const shop = lowOnSupplies ? nearestPlace(['supplies']) : null;
+        const armory = !game.hasShotgun ? nearestPlace(['armory']) : null;
+        if (radarPlace && !game.radarOn) {
           objective = pointAt('Power up the radar', radarPlace.x, radarPlace.y);
-        } else if (nearestHiding >= 0) {
-          objective = pointAt('Find survivors', cv.x[nearestHiding], cv.y[nearestHiding]);
+        } else if (shop) {
+          objective = pointAt('Find food and ammunition', shop.x, shop.y);
+        } else if (armory) {
+          objective = pointAt('Find the armory', armory.x, armory.y);
         }
       }
 
@@ -1332,22 +1245,6 @@ export async function createCityScene(
           const [rx, ry] = screenOffset(current.yaw, dx, dy);
           found.push(rx, ry, s === ZState.WANDER ? 0 : 1);
         }
-        const folk: number[] = [];
-        for (let i = 0; i < cv.count; i++) {
-          const s = cv.state[i];
-          if (s !== CState.HIDING && s !== CState.FOLLOWING) continue;
-          const [rx, ry] = screenOffset(current.yaw, cv.x[i] - player.x, cv.y[i] - player.y);
-          folk.push(rx, ry, s === CState.FOLLOWING ? 1 : 0);
-        }
-        let landing: RadarFrame['landing'] = null;
-        if (game.landing) {
-          const [rx, ry] = screenOffset(
-            current.yaw,
-            game.landing[0] - player.x,
-            game.landing[1] - player.y,
-          );
-          landing = { x: rx, y: ry };
-        }
         radarFrames.emit({
           range,
           zombies: Float32Array.from(found),
@@ -1355,22 +1252,8 @@ export async function createCityScene(
             const [rx, ry] = screenOffset(current.yaw, p.x - player.x, p.y - player.y);
             return { kind: p.kind, x: rx, y: ry, used: game.used[p.id] };
           }),
-          people: Float32Array.from(folk),
-          landing,
           north: screenAngle(current.yaw, 0, 1),
           heading: screenAngle(current.yaw, Math.cos(player.heading), Math.sin(player.heading)),
-          wave:
-            game.wavesOn && gamePhase === 'playing' && !game.inbound
-              ? {
-                  seconds: Math.max(0, game.nextWave - game.time),
-                  angle: screenAngle(
-                    current.yaw,
-                    Math.cos(game.waveAngle),
-                    Math.sin(game.waveAngle),
-                  ),
-                  size: GAME.waves.base + GAME.waves.perWave * (game.wave + 1),
-                }
-              : null,
         });
         radarWasOn = true;
       } else if (radarWasOn) {
@@ -1400,24 +1283,13 @@ export async function createCityScene(
         reloading: game.reloading > 0 ? 1 - game.reloading / weaponConfig(game.weapon).reload : 0,
         shove: 1 - game.shoveCooldown / GAME.shove.cooldown,
         time: game.time,
-        rescueIn: rescueIn(game),
-        rescueTotal: game.rescueAt,
-        inbound: game.inbound,
         kills: game.stats.kills,
-        wave: game.wave,
         zombies: game.horde.alive,
         near,
+        population: { ...game.population },
         prompt: here ? { label: here.label, name: here.place.name } : null,
         radarOn: game.radarOn,
         objective,
-        survivors: {
-          following,
-          sheltered,
-          hiding,
-          lost: game.stats.lost,
-          saved: game.stats.saved,
-          total: cv.placed,
-        },
         inside:
           game.inside >= 0
             ? {
@@ -1538,30 +1410,48 @@ export async function createCityScene(
             }
             return placed;
           },
+          crowd(count, distance) {
+            let placed = 0;
+            for (let k = 0; k < count * 30 && placed < count; k++) {
+              const a = Math.random() * Math.PI * 2;
+              const r = distance * (0.6 + Math.random() * 0.8);
+              const x = player.x + Math.cos(a) * r;
+              const y = player.y + Math.sin(a) * r;
+              if (!validSpot(gameWorld, x, y, 0.6)) continue;
+              if (spawnHuman(game.humans, x, y, HState.WALK) < 0) break;
+              placed++;
+            }
+            return placed;
+          },
+          infect(count) {
+            const o = game.outbreak;
+            let best = -1;
+            let bestD = Infinity;
+            for (let b = 0; b < o.count; b++) {
+              if (o.healthy[b] < count || Number.isNaN(o.doorX[b])) continue;
+              const d = Math.hypot(o.doorX[b] - player.x, o.doorY[b] - player.y);
+              if (d < bestD) {
+                bestD = d;
+                best = b;
+              }
+            }
+            if (best < 0) return false;
+            o.healthy[best] -= count;
+            o.undead[best] += count;
+            return true;
+          },
           people() {
-            const c = game.civilians;
-            return Array.from({ length: c.count }, (_, i) => ({
-              x: c.x[i],
-              y: c.y[i],
-              state: c.state[i],
-            }));
+            const h = game.humans;
+            const all: { x: number; y: number; state: number }[] = [];
+            for (let i = 0; i < h.used; i++) {
+              if (h.state[i] === HState.FREE) continue;
+              all.push({ x: h.x[i], y: h.y[i], state: h.state[i] });
+            }
+            return all;
           },
           teleport(x, y) {
             game.player = { ...game.player, x, y, vx: 0, vy: 0 };
             player = previous = game.player;
-          },
-          callPeople(count) {
-            const c = game.civilians;
-            let n = 0;
-            for (let i = 0; i < c.count && n < count; i++) {
-              if (c.state[i] !== CState.HIDING && c.state[i] !== CState.FOLLOWING) continue;
-              const a = (n / Math.max(1, count)) * Math.PI * 2 + 0.5;
-              c.x[i] = player.x + Math.cos(a) * (3 + (n % 3));
-              c.y[i] = player.y + Math.sin(a) * (3 + (n % 3));
-              c.state[i] = CState.FOLLOWING;
-              n++;
-            }
-            return n;
           },
           autoAim(on) {
             debugAutoAim = on;
@@ -1595,7 +1485,6 @@ export async function createCityScene(
             kills: game.stats.kills,
             shots: game.stats.shots,
             time: game.time,
-            wave: game.wave,
             x: game.player.x,
             y: game.player.y,
             heading: game.player.heading,
@@ -1603,11 +1492,11 @@ export async function createCityScene(
             used: game.used.filter(Boolean).length,
             inside: game.inside,
             door: game.inside >= 0 ? game.doors[game.inside] : -1,
-            following: countIn(game.civilians, CState.FOLLOWING),
-            sheltered: countIn(game.civilians, CState.SHELTERED),
-            hiding: countIn(game.civilians, CState.HIDING),
-            lost: game.stats.lost,
-            saved: game.stats.saved,
+            healthy: game.population.healthy,
+            bitten: game.population.bitten,
+            turned: game.population.zombies,
+            streets: game.humans.alive,
+            broken: game.outbreak.open.reduce((n, v) => n + v, 0),
           }),
         }
       : undefined,

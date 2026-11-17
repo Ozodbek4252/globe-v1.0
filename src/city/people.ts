@@ -1,16 +1,13 @@
-// Drawing the survivors you are trying to save: ordinary people in bright clothes (so they stand out
-// from the dull, hunched zombies), cowering where they hide, walking behind you once they join. Six
-// outfits, each its own instanced mesh; the walk cycle runs in the vertex shader as for the zombies.
-// Those still in hiding get a green ring and a faint column of light so they can be found.
+// Drawing the people in the street: ordinary people in ordinary clothes who stroll about, run when they
+// see danger, and stagger on, sickly green, once bitten. Six outfits, each its own instanced mesh; the
+// walk cycle runs in the vertex shader as for the zombies. Only those near the camera's focus are drawn
+// as figures; from high up, everyone is a dot (there can be thousands).
 
 import {
-  AdditiveBlending,
   BoxGeometry,
   CapsuleGeometry,
   CircleGeometry,
   Color,
-  CylinderGeometry,
-  DoubleSide,
   DynamicDrawUsage,
   Euler,
   InstancedBufferAttribute,
@@ -20,25 +17,28 @@ import {
   MeshStandardMaterial,
   Object3D,
   Quaternion,
-  RingGeometry,
   SphereGeometry,
   Vector3,
   type BufferGeometry,
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CIVILIAN, CState, type Civilians } from '../sim/civilians';
+import { HState, type Humans } from '../sim/humans';
 import { LIMB_ATTRIBUTES, LIMB_SWING, tagLimbs } from './zombies';
 
 export interface PeopleRenderer {
   object: Object3D;
   /**
    * Pose everyone for this frame.
-   * @param seconds a steady clock, for trembling and pulsing
-   * @param cameraDistance how far the camera is from what it looks at: markers and dots grow with it
+   * @param seconds a steady clock, for swaying
+   * @param cameraDistance how far the camera is from what it looks at: dots grow with it
+   * @param focusX where the camera is looking (city metres): only people near it are drawn as figures
    */
-  update(c: Civilians, seconds: number, cameraDistance: number): void;
+  update(h: Humans, seconds: number, cameraDistance: number, focusX: number, focusY: number): void;
   dispose(): void;
 }
+
+/** How far from the focus a person is drawn as a figure (beyond it, only as a dot). */
+const FIGURE_RANGE = 110;
 
 const SKIN = new Color(0xd9a98a);
 const HAIR = [new Color(0x1d1a18), new Color(0x4a3426), new Color(0xb08a4a), new Color(0x7a2f22)];
@@ -54,12 +54,12 @@ const OUTFITS: readonly [number, number][] = [
 ];
 
 const STRIDE = 1.5;
-const MARK = new Color(0x7dff8f);
-const DOT_HIDING = new Color(0x6bff7c);
-const DOT_FOLLOWING = new Color(0xd6ffdc);
+const WELL = new Color(0xffffff);
+const SICK = new Color(0x9fd36a);
+const DOT_WELL = new Color(0xcfe6ff);
+const DOT_SICK = new Color(0xb4e04e);
 
 const hash = (i: number): number => ((Math.imul(i + 1, 2654435761) >>> 0) % 4096) / 4096;
-const easeOut = (t: number): number => 1 - (1 - t) * (1 - t);
 
 /** An upright person, facing +Z, feet on y = 0, about 1.75 m tall. */
 function buildPerson(jacket: Color, trousers: Color, hair: Color): BufferGeometry {
@@ -116,39 +116,13 @@ export function createPeopleRenderer(capacity: number): PeopleRenderer {
     geometry.setAttribute('aAmp', amp);
     const mesh = new InstancedMesh(geometry, material, capacity);
     mesh.instanceMatrix.setUsage(DynamicDrawUsage);
+    mesh.setColorAt(0, WELL); // makes room for a tint per person
     mesh.castShadow = true;
     mesh.frustumCulled = false;
     mesh.count = 0;
     object.add(mesh);
     return { geometry, phase, amp, mesh };
   });
-
-  // marks for those in hiding: a ring on the ground and a faint column of light
-  const ringGeometry = new RingGeometry(0.8, 1.1, 32);
-  ringGeometry.rotateX(-Math.PI / 2);
-  const columnGeometry = new CylinderGeometry(0.55, 0.55, 1, 16, 1, true);
-  columnGeometry.translate(0, 0.5, 0);
-  const markMaterial = (opacity: number): MeshBasicMaterial =>
-    new MeshBasicMaterial({
-      color: MARK,
-      transparent: true,
-      opacity,
-      blending: AdditiveBlending,
-      depthWrite: false,
-      side: DoubleSide,
-      fog: false,
-    });
-  const ringMaterial = markMaterial(0.7);
-  const columnMaterial = markMaterial(0.18);
-  const rings = new InstancedMesh(ringGeometry, ringMaterial, capacity);
-  const columns = new InstancedMesh(columnGeometry, columnMaterial, capacity);
-  for (const m of [rings, columns]) {
-    m.instanceMatrix.setUsage(DynamicDrawUsage);
-    m.frustumCulled = false;
-    m.renderOrder = 6;
-    m.count = 0;
-    object.add(m);
-  }
 
   // dots, for seeing them from far away
   const dotGeometry = new CircleGeometry(1, 12);
@@ -162,7 +136,7 @@ export function createPeopleRenderer(capacity: number): PeopleRenderer {
   });
   const dots = new InstancedMesh(dotGeometry, dotMaterial, capacity);
   dots.instanceMatrix.setUsage(DynamicDrawUsage);
-  dots.setColorAt(0, DOT_HIDING);
+  dots.setColorAt(0, DOT_WELL);
   dots.frustumCulled = false;
   dots.renderOrder = 7;
   dots.count = 0;
@@ -178,96 +152,67 @@ export function createPeopleRenderer(capacity: number): PeopleRenderer {
 
   return {
     object,
-    update(c, seconds, cameraDistance) {
+    update(h, seconds, cameraDistance, focusX, focusY) {
       counts.fill(0);
-      const grow = Math.min(12, Math.max(1, cameraDistance / 45));
-      let marks = 0;
       let dotCount = 0;
       const dotAmount = Math.min(1, Math.max(0, (cameraDistance - 55) / 70));
       dotMaterial.opacity = 0.95 * dotAmount;
       dots.visible = dotAmount > 0.01;
       const dotSize = Math.min(3.5, Math.max(0.8, cameraDistance / 240));
+      const range2 = FIGURE_RANGE * FIGURE_RANGE;
 
-      for (let i = 0; i < c.count; i++) {
-        const state = c.state[i];
-        if (state === CState.SHELTERED || state === CState.SAVED) continue;
-        const dead = state === CState.DEAD;
-        if (dead && c.deadT[i] > CIVILIAN.linger) continue;
-        const x = c.x[i];
-        const y = c.y[i];
-        const k = i % OUTFITS.length;
-        const o = outfits[k];
-        const n = counts[k]++;
+      for (let i = 0; i < h.used; i++) {
+        const state = h.state[i];
+        if (state === HState.FREE) continue;
+        const x = h.x[i];
+        const y = h.y[i];
+        const sick = state === HState.BITTEN;
 
-        let lean = 0.05;
-        let swing = Math.min(1.2, Math.hypot(c.vx[i], c.vy[i]) / 3) * 0.7;
-        let lift = 0;
-        let fall = 0;
-        let height = 1;
-        let heading = c.heading[i];
-        if (state === CState.HIDING) {
-          // cowering: crouched, hunched over, trembling a little
-          lean = 0.45;
-          height = 0.82;
-          swing = 0;
-          heading += Math.sin(seconds * 1.3 + i) * 0.35;
-        } else if (dead) {
-          fall = easeOut(Math.min(1, c.deadT[i] / 0.5));
-          swing = 0;
-          lift = 0.17 * fall;
-          const sink = CIVILIAN.linger - 1.5;
-          if (c.deadT[i] > sink) lift -= Math.min(1, (c.deadT[i] - sink) / 1.5) * 0.5;
-        } else {
-          lean = 0.1;
-        }
-
-        position.set(x, lift, -y);
-        euler.set(
-          dead ? (i % 2 === 0 ? 1 : -1) * fall * (Math.PI / 2 - 0.05) : lean,
-          heading + Math.PI / 2,
-          0,
-          'YXZ',
-        );
-        quaternion.setFromEuler(euler);
-        const size = 0.95 + hash(i) * 0.1;
-        scale.set(size, size * height, size);
-        matrix.compose(position, quaternion, scale);
-        o.mesh.setMatrixAt(n, matrix);
-        o.phase.setX(n, (c.travelled[i] / STRIDE) * Math.PI * 2 + hash(i) * 6.28);
-        o.amp.setX(n, swing);
-
-        if (state === CState.HIDING) {
-          dummy.rotation.set(0, 0, 0);
-          dummy.position.set(x, 0.3, -y);
-          dummy.scale.setScalar(grow * (1 + 0.06 * Math.sin(seconds * 2.6 + i)));
-          dummy.updateMatrix();
-          rings.setMatrixAt(marks, dummy.matrix);
-          dummy.position.set(x, 0, -y);
-          dummy.scale.set(grow, 16, grow);
-          dummy.updateMatrix();
-          columns.setMatrixAt(marks, dummy.matrix);
-          marks++;
-        }
-        if (dotAmount > 0.01 && !dead) {
+        if (dotAmount > 0.01) {
           dummy.rotation.set(0, 0, 0);
           dummy.position.set(x, 0.2, -y);
           dummy.scale.setScalar(dotSize);
           dummy.updateMatrix();
           dots.setMatrixAt(dotCount, dummy.matrix);
-          dots.setColorAt(dotCount, state === CState.HIDING ? DOT_HIDING : DOT_FOLLOWING);
+          dots.setColorAt(dotCount, sick ? DOT_SICK : DOT_WELL);
           dotCount++;
         }
+        if ((x - focusX) ** 2 + (y - focusY) ** 2 > range2) continue;
+
+        const k = i % OUTFITS.length;
+        const o = outfits[k];
+        const n = counts[k]++;
+        const speed = Math.hypot(h.vx[i], h.vy[i]);
+        let lean = 0.06;
+        let swing = Math.min(1.2, speed / 3) * 0.7;
+        let heading = h.heading[i];
+        if (state === HState.FLEE) {
+          lean = 0.28; // running, bent forward
+          swing = Math.min(1.5, speed / 3) * 0.95;
+        } else if (sick) {
+          lean = 0.34; // doubled over, swaying
+          swing *= 0.6;
+          heading += Math.sin(seconds * 1.7 + i) * 0.3;
+        }
+        position.set(x, 0, -y);
+        euler.set(lean, heading + Math.PI / 2, 0, 'YXZ');
+        quaternion.setFromEuler(euler);
+        const size = 0.95 + hash(i) * 0.1;
+        scale.set(size, size, size);
+        matrix.compose(position, quaternion, scale);
+        o.mesh.setMatrixAt(n, matrix);
+        o.mesh.setColorAt(n, sick ? SICK : WELL);
+        o.phase.setX(n, (h.travelled[i] / STRIDE) * Math.PI * 2 + hash(i) * 6.28);
+        o.amp.setX(n, swing);
       }
 
       outfits.forEach((o, k) => {
         o.mesh.count = counts[k];
         o.mesh.instanceMatrix.needsUpdate = true;
+        if (o.mesh.instanceColor) o.mesh.instanceColor.needsUpdate = true;
         o.phase.needsUpdate = true;
         o.amp.needsUpdate = true;
       });
-      rings.count = columns.count = marks;
-      rings.instanceMatrix.needsUpdate = true;
-      columns.instanceMatrix.needsUpdate = true;
       dots.count = dotCount;
       dots.instanceMatrix.needsUpdate = true;
       if (dots.instanceColor) dots.instanceColor.needsUpdate = true;
@@ -278,9 +223,9 @@ export function createPeopleRenderer(capacity: number): PeopleRenderer {
         o.mesh.dispose();
       }
       material.dispose();
-      for (const g of [ringGeometry, columnGeometry, dotGeometry]) g.dispose();
-      for (const m of [ringMaterial, columnMaterial, dotMaterial]) m.dispose();
-      for (const m of [rings, columns, dots]) m.dispose();
+      dotGeometry.dispose();
+      dotMaterial.dispose();
+      dots.dispose();
     },
   };
 }

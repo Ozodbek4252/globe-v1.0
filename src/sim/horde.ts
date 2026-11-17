@@ -5,9 +5,10 @@
 // zombies cost no allocation per step. Slots are reused when the dead are cleared away.
 
 import { createRng, nextFloat, nextRange, type Rng } from '../lib/rng';
-import { moveCircle, resolveCircle, type Colliders } from './colliders';
+import { moveCircleLong, resolveCircle, type Colliders } from './colliders';
 import { flowStep, navCell, type FlowField, type NavGrid } from './flow';
 import { lineOfSight } from './raycast';
+import { createPointIndex, forEachNear, rebuildIndex, type PointIndex } from './spatial';
 import { angleDelta, PLAYER } from './player';
 
 export const ZState = {
@@ -47,8 +48,14 @@ export const ZOMBIE = {
   /** Centre-to-centre distance at which a zombie starts to strike, and at which a strike still lands. */
   attackStart: 1.05,
   attackReach: 1.5,
-  /** Seconds without a sign of the survivor before a chaser gives up the trail. */
-  loseTrack: 6,
+  /** A strike at someone else (not the survivor) reaches this much further: a lunge at a person running away. */
+  lunge: 1.5,
+  /**
+   * Seconds without a sign of the survivor before a chaser gives up the trail; and for how much of that
+   * it still knows where they are (round a corner), before it is only heading for where it last saw them.
+   */
+  loseTrack: 2.5,
+  memory: 1.2,
   /** A chasing zombie rouses others this close. */
   alertRadius: 9,
   /** How far it sees a target in the open (with a clear line), and how far it notices one while chasing. */
@@ -91,16 +98,54 @@ export interface Targets {
   active: Uint8Array;
   /** Damage zombies have dealt to each slot. The caller applies it and clears it. */
   damage: Float32Array;
+  /** Where the active slots are (rebuilt at the start of each step). */
+  index: PointIndex;
 }
 
-export function createTargets(count: number): Targets {
+/** @param half the map spans -half to +half, so the index covers it */
+export function createTargets(count: number, half = 1100): Targets {
   return {
     count,
     x: new Float32Array(count),
     y: new Float32Array(count),
     active: new Uint8Array(count),
     damage: new Float32Array(count),
+    index: createPointIndex(half, 12, count),
   };
+}
+
+/** Index the active slots, so zombies can ask "what is near me?" (done once at the start of each step). */
+function rebuildTargets(t: Targets): void {
+  rebuildIndex(t.index, t.count, t.x, t.y, (k) => t.active[k] === 1);
+}
+
+// What a zombie is looking for among the targets: shared scratch, so the search allocates nothing.
+const probe = {
+  world: null as Colliders | null,
+  targets: null as Targets | null,
+  x: 0,
+  y: 0,
+  best: -1,
+  bestD2: 0,
+};
+
+function visitTarget(k: number, d2: number): void {
+  const t = probe.targets;
+  if (!t || d2 >= probe.bestD2) return;
+  // close by, it smells them through anything; farther off it needs a clear line
+  if (
+    d2 > ZOMBIE.smell * ZOMBIE.smell &&
+    (!probe.world || !lineOfSight(probe.world, probe.x, probe.y, t.x[k], t.y[k]))
+  ) {
+    return;
+  }
+  probe.best = k;
+  probe.bestD2 = d2;
+}
+
+/** Index the standing zombies, for anyone who needs to know where they are. */
+export function rebuildZombieIndex(h: Horde, ix: PointIndex): void {
+  rebuildIndex(ix, h.used, h.x, h.y, (i) => h.state[i] < ZState.DEAD);
 }
 
 export interface HordeContext {
@@ -368,6 +413,7 @@ export function stepHorde(h: Horde, ctx: HordeContext, dt: number, tick: number)
   h.doorDamage = 0;
   h.engaged = 0;
   buildGrid(h, ctx.px, ctx.py);
+  if (ctx.targets) rebuildTargets(ctx.targets);
   const far2 = ZOMBIE.farRange * ZOMBIE.farRange;
   for (let i = 0; i < h.used; i++) {
     const s = h.state[i];
@@ -470,24 +516,14 @@ function perceive(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number
   // not aware of the survivor: is there someone else worth going for?
   if (targets) {
     const reach = s === ZState.CHASE ? ZOMBIE.targetNear : ZOMBIE.targetSight;
-    let best = -1;
-    let bestD2 = reach * reach;
-    for (let k = 0; k < targets.count; k++) {
-      if (targets.active[k] !== 1) continue;
-      const dx = targets.x[k] - x;
-      const dy = targets.y[k] - y;
-      const dd = dx * dx + dy * dy;
-      if (dd >= bestD2) continue;
-      // close by, it smells them through anything; farther off it needs a clear line
-      if (
-        dd > ZOMBIE.smell * ZOMBIE.smell &&
-        !lineOfSight(ctx.world, x, y, targets.x[k], targets.y[k])
-      ) {
-        continue;
-      }
-      best = k;
-      bestD2 = dd;
-    }
+    probe.world = ctx.world;
+    probe.x = x;
+    probe.y = y;
+    probe.targets = targets;
+    probe.best = -1;
+    probe.bestD2 = reach * reach;
+    forEachNear(targets.index, x, y, reach, targets.x, targets.y, visitTarget);
+    const best = probe.best;
     if (best >= 0) {
       h.victim[i] = best;
       h.state[i] = ZState.CHASE;
@@ -613,7 +649,7 @@ function move(h: Horde, i: number, ctx: HordeContext, dt: number): void {
   const vy = h.vy[i];
   const speed = Math.hypot(vx, vy);
   if (speed < 0.005) return;
-  const [nx, ny] = moveCircle(ctx.world, x, y, x + vx * dt, y + vy * dt, ZOMBIE.radius);
+  const [nx, ny] = moveCircleLong(ctx.world, x, y, x + vx * dt, y + vy * dt, ZOMBIE.radius);
   const moved = Math.hypot(nx - x, ny - y);
   h.stuck[i] = moved < speed * dt * 0.3 ? h.stuck[i] + dt : Math.max(0, h.stuck[i] - dt);
   h.x[i] = nx;
@@ -745,9 +781,18 @@ function chase(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number): 
     h.attackT[i] = 0;
     return;
   }
-  let dirX = (ctx.px - h.x[i]) / (d || 1);
-  let dirY = (ctx.py - h.y[i]) / (d || 1);
-  if (!(h.clear[i] === 1 && d < 20) && d > 2.5) {
+  // A zombie only knows where the survivor is while it has a fresh sign of them. Once it has lost them
+  // for a moment it heads for where they were last seen, not where they are now: hide, and it is
+  // looking in the wrong place.
+  const tracking = h.timer[i] < ZOMBIE.memory;
+  const aimX = tracking || Number.isNaN(h.tx[i]) ? ctx.px : h.tx[i];
+  const aimY = tracking || Number.isNaN(h.ty[i]) ? ctx.py : h.ty[i];
+  const toX = aimX - h.x[i];
+  const toY = aimY - h.y[i];
+  const toD = Math.hypot(toX, toY) || 1;
+  let dirX = toX / toD;
+  let dirY = toY / toD;
+  if (tracking && !(h.clear[i] === 1 && d < 20) && d > 2.5) {
     const flow = flowStep(ctx.flow, h.x[i], h.y[i]);
     if (flow) {
       dirX = flow[0];
@@ -777,7 +822,8 @@ function attack(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number):
   if (!targets && ctx.playerAlive && d < ZOMBIE.attackReach) h.engaged++;
   if (h.phase[i] === 0) {
     if (h.attackT[i] >= kind.windup) {
-      if (d <= ZOMBIE.attackReach && lineOfSight(ctx.world, h.x[i], h.y[i], aimX, aimY)) {
+      const reach = targets ? ZOMBIE.attackReach + ZOMBIE.lunge : ZOMBIE.attackReach;
+      if (d <= reach && lineOfSight(ctx.world, h.x[i], h.y[i], aimX, aimY)) {
         if (targets) targets.damage[v] += kind.damage;
         else if (ctx.playerAlive) {
           if (ctx.hidden) h.doorDamage += kind.damage;

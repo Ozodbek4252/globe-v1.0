@@ -20,7 +20,7 @@ const hits = ref<{ id: number; angle: number }[]>([]);
 const vignette = ref(0);
 const banner = ref<{
   id: number;
-  tone: 'wave' | 'rescue' | 'radar';
+  tone: 'danger' | 'radar';
   title: string;
   sub: string;
   angle: number | null;
@@ -40,11 +40,15 @@ function later(fn: () => void, ms: number): void {
   timers.add(t);
 }
 
-const minutes = (seconds: number): string => {
-  const total = Math.max(0, Math.ceil(seconds));
-  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+/** Minutes and seconds, counting up: 4:07. Past an hour, 1:04:07. */
+const clock = (seconds: number): string => {
+  const total = Math.max(0, Math.floor(seconds));
+  const s = String(total % 60).padStart(2, '0');
+  const m = Math.floor(total / 60);
+  return m >= 60 ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}:${s}` : `${m}:${s}`;
 };
 const plural = (n: number, one: string, many = one + 's'): string => `${n} ${n === 1 ? one : many}`;
+const count = (n: number): string => n.toLocaleString('en-US');
 
 /** The game tells the HUD what happened; the HUD shows it for a moment. */
 function push(n: GameNotice): void {
@@ -54,28 +58,6 @@ function push(n: GameNotice): void {
       hits.value = [...hits.value.slice(-3), { id, angle: n.angle }];
       vignette.value++;
       later(() => (hits.value = hits.value.filter((h) => h.id !== id)), 1300);
-      break;
-    case 'wave':
-      banner.value = {
-        id,
-        tone: 'wave',
-        title: `Wave ${n.number}`,
-        sub: `${plural(n.size, 'zombie')} coming from the ${n.compass}`,
-        angle: n.angle,
-      };
-      announcement.value = `Wave ${n.number}: ${plural(n.size, 'zombie')} coming from the ${n.compass}.`;
-      later(() => banner.value?.id === id && (banner.value = null), 6000);
-      break;
-    case 'rescue':
-      banner.value = {
-        id,
-        tone: 'rescue',
-        title: 'Helicopter inbound',
-        sub: `Hold out for ${n.seconds} seconds. The noise is drawing them all.`,
-        angle: null,
-      };
-      announcement.value = `Helicopter inbound. Hold out for ${n.seconds} seconds.`;
-      later(() => banner.value?.id === id && (banner.value = null), 7000);
       break;
     case 'pickup':
       toast.value = {
@@ -111,52 +93,27 @@ function push(n: GameNotice): void {
       announcement.value = `Inside ${n.place}. Rest here, but watch the door.`;
       later(() => toast.value?.id === id && (toast.value = null), 3200);
       break;
-    case 'breach': {
-      const people =
-        n.lost > 0 ? ` ${plural(n.lost, 'person', 'people')} behind it did not survive.` : '';
+    case 'breach':
       banner.value = {
         id,
-        tone: 'wave',
+        tone: 'danger',
         title: 'The door gave way',
-        sub: `${n.place} is lost.${people}`,
+        sub: `${n.place} is lost. Run.`,
         angle: null,
       };
-      announcement.value = `The door of ${n.place} gave way. The shelter is lost.${people}`;
+      announcement.value = `The door of ${n.place} gave way. The shelter is lost.`;
       later(() => banner.value?.id === id && (banner.value = null), 5500);
-      break;
-    }
-    case 'recruit':
-      toast.value = {
-        id,
-        text:
-          n.following === 1
-            ? 'A survivor joins you'
-            : `A survivor joins you · ${n.following} with you`,
-      };
-      announcement.value = `A survivor joins you. ${plural(n.following, 'survivor')} with you.`;
-      later(() => toast.value?.id === id && (toast.value = null), 2400);
-      break;
-    case 'sheltered':
-      toast.value = { id, text: `${plural(n.count, 'survivor')} safe inside` };
-      announcement.value = `${plural(n.count, 'survivor')} went inside ${n.place} with you.`;
-      later(() => toast.value?.id === id && (toast.value = null), 2800);
-      break;
-    case 'civilianDown':
-      toast.value = { id, text: 'Someone did not make it' };
-      announcement.value = 'A survivor was killed.';
-      hits.value = hits.value.slice(-3);
-      later(() => toast.value?.id === id && (toast.value = null), 2400);
       break;
     case 'radar':
       banner.value = {
         id,
         tone: 'radar',
         title: 'Radar online',
-        sub: 'The horde is on your scope, and so is the direction of the next wave.',
+        sub: 'The horde is on your scope.',
         angle: null,
       };
-      announcement.value = 'Radar online. The horde and the next wave are now on your scope.';
-      later(() => banner.value?.id === id && (banner.value = null), 6000);
+      announcement.value = 'Radar online. The horde is now on your scope.';
+      later(() => banner.value?.id === id && (banner.value = null), 5000);
       break;
     case 'restart':
       reset();
@@ -164,7 +121,7 @@ function push(n: GameNotice): void {
     case 'over':
       over.value = n;
       banner.value = null;
-      announcement.value = n.won ? 'Rescued. You survived.' : 'You died.';
+      announcement.value = `You died after ${clock(n.time)}.`;
       void nextTick(() => again.value?.focus());
       break;
   }
@@ -197,7 +154,7 @@ const ammoLow = computed(
   () => !!props.player && props.player.ammo <= 3 && props.player.reserve === 0,
 );
 const hurting = computed(() => !!props.player && props.player.health < 30);
-const survived = computed(() => (over.value ? minutes(over.value.time) : ''));
+const survived = computed(() => (over.value ? clock(over.value.time) : ''));
 const accuracy = computed(() =>
   over.value && over.value.shots > 0 ? Math.round((over.value.hits / over.value.shots) * 100) : 0,
 );
@@ -220,17 +177,17 @@ const accuracy = computed(() =>
     </div>
 
     <template v-if="player">
-      <div class="hud-top" :class="{ inbound: player.inbound }">
-        <span class="hud-label">{{ player.inbound ? 'Helicopter landing in' : 'Rescue in' }}</span>
-        <span class="hud-clock">{{ minutes(player.rescueIn) }}</span>
+      <div class="hud-top">
+        <span class="hud-label">Survived</span>
+        <span class="hud-clock">{{ clock(player.time) }}</span>
         <span class="hud-sub"
-          >Wave {{ player.wave }} · {{ plural(player.zombies, 'zombie') }} out there ·
+          >{{ plural(player.zombies, 'zombie') }} out there ·
           {{ plural(player.near, 'zombie') }} near · {{ plural(player.kills, 'kill') }}</span
         >
-        <span v-if="player.survivors.total > 0" class="hud-sub hud-people"
-          >Survivors: {{ player.survivors.following }} with you ·
-          {{ player.survivors.sheltered }} inside · {{ player.survivors.hiding }} hiding ·
-          {{ player.survivors.lost }} lost</span
+        <span class="hud-sub hud-people"
+          >The city: {{ count(player.population.healthy) }} well ·
+          {{ count(player.population.bitten) }} bitten ·
+          {{ count(player.population.zombies) }} turned</span
         >
         <span v-if="player.objective" class="hud-objective">
           <span
@@ -335,35 +292,17 @@ const accuracy = computed(() =>
       </div>
     </div>
 
-    <div
-      v-if="over"
-      class="hud-over"
-      role="dialog"
-      aria-modal="true"
-      :aria-label="over.won ? 'Rescued' : 'You died'"
-    >
-      <div class="hud-card" :class="{ won: over.won }">
-        <h2>{{ over.won ? 'Rescued' : 'You did not make it' }}</h2>
-        <p>
-          {{
-            over.won
-              ? 'The helicopter lifts you out of the city.'
-              : 'The horde got you before the rescue arrived.'
-          }}
-        </p>
+    <div v-if="over" class="hud-over" role="dialog" aria-modal="true" aria-label="You died">
+      <div class="hud-card">
+        <h2>You survived {{ survived }}</h2>
+        <p>There was no rescue coming. Next time, last longer.</p>
         <dl>
-          <dt>Survived</dt>
-          <dd>{{ survived }}</dd>
           <dt>Zombies killed</dt>
           <dd>{{ over.kills }}</dd>
           <dt>Accuracy</dt>
           <dd>{{ accuracy }}% ({{ over.hits }} of {{ over.shots }})</dd>
-          <template v-if="over.total > 0">
-            <dt>Survivors saved</dt>
-            <dd>{{ over.saved }} of {{ over.total }}</dd>
-          </template>
-          <dt>Waves faced</dt>
-          <dd>{{ over.waves }}</dd>
+          <dt>The city, still well</dt>
+          <dd>{{ count(over.healthy) }} of {{ count(over.initial) }}</dd>
           <dt>Damage taken</dt>
           <dd>{{ over.damageTaken }}</dd>
         </dl>
@@ -469,10 +408,6 @@ const accuracy = computed(() =>
   font-variant-numeric: tabular-nums;
   line-height: 1.05;
   color: var(--ink);
-}
-.hud-top.inbound .hud-clock {
-  color: #ffd27a;
-  animation: hud-pulse 1s ease-in-out infinite;
 }
 .hud-sub {
   font-size: 12px;
@@ -591,10 +526,6 @@ const accuracy = computed(() =>
   text-align: center;
   animation: hud-in 0.35s ease-out;
   max-width: min(520px, 90vw);
-}
-.hud-banner.rescue {
-  border-color: rgba(255, 210, 122, 0.6);
-  background: rgba(24, 18, 6, 0.74);
 }
 .hud-banner.radar {
   border-color: rgba(74, 168, 255, 0.6);
@@ -750,10 +681,6 @@ const accuracy = computed(() =>
   border-color: rgba(120, 150, 210, 0.6);
   background: rgba(8, 12, 22, 0.92);
 }
-.hud-card.won {
-  border-color: rgba(255, 210, 122, 0.65);
-  background: rgba(16, 14, 8, 0.92);
-}
 .hud-card h2 {
   margin: 0 0 6px;
   font: 700 30px var(--f-display);
@@ -816,7 +743,6 @@ const accuracy = computed(() =>
 }
 @media (prefers-reduced-motion: reduce) {
   .hud-low,
-  .hud-top.inbound .hud-clock,
   .hud-banner,
   .hud-toast,
   .hud-card {

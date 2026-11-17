@@ -49,11 +49,10 @@ let stopRadar: (() => void) | null = null;
  *   &view=x,y,yaw,pitch,distance      start with the free camera here
  *   &player=x,y                       put the survivor near this point
  *   &camera=free|follow               which camera to start with
- *   &seed=123                         replay the same game (same zombies, supplies and waves)
- *   &rescue=60                        seconds until the helicopter lands (default 300)
- *   &zombies=0                        groups of zombies in the streets at the start (default 70)
- *   &waves=0                          switch the waves off
- *   &people=0                         survivors hiding around the map (default 10)
+ *   &seed=123                         replay the same game (same outbreak, zombies and supplies)
+ *   &zombies=0                        groups of zombies in the streets at the start (default 0)
+ *   &patients=3                       where the outbreak starts: people turned in this many buildings (0: a calm city)
+ *   &density=7700                     people per square kilometre (default: Tashkent's)
  */
 function linkOptions(): {
   hour?: number;
@@ -81,13 +80,12 @@ function linkOptions(): {
     return Number.isFinite(v) ? v : undefined;
   };
   game.seed = number('seed');
-  const rescue = number('rescue');
-  if (rescue !== undefined && rescue > 0) game.rescueAt = rescue;
   const zombies = number('zombies');
   if (zombies !== undefined && zombies >= 0) game.zombies = Math.min(300, Math.floor(zombies));
-  if (q.get('waves') === '0') game.waves = false;
-  const people = number('people');
-  if (people !== undefined && people >= 0) game.people = Math.min(30, Math.floor(people));
+  const patients = number('patients');
+  if (patients !== undefined && patients >= 0) game.patients = Math.min(40, Math.floor(patients));
+  const density = number('density');
+  if (density !== undefined && density > 0) game.density = Math.min(30000, density);
   out.game = game;
   if (q.get('debug') === '1') out.debug = true;
   return out;

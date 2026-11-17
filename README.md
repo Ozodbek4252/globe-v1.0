@@ -7,9 +7,9 @@ person, income group, live day and night), a NASA night-lights layer, search, an
 It is a Vite + TypeScript + Vue 3 app. The globe is drawn with Canvas 2D (d3-geo) plus a WebGL2
 fragment shader for the night lights. It is the base for an outbreak survival game, and the first
 playable piece is in: press **Enter Tashkent** to drop from the globe into a 3D city built from real
-OpenStreetMap buildings, with a horde of zombies in it. You steer one survivor with a pistol and have
-to stay alive until the rescue helicopter lands (see [The 3D city](#the-3d-city) and
-[The game](#the-game)). The rules live in [src/sim](src/sim/README.md).
+OpenStreetMap buildings and full of its people, where an outbreak has just begun. You steer one
+survivor with a pistol and have to stay alive as long as you can: there is no rescue and no cure (see
+[The 3D city](#the-3d-city) and [The game](#the-game)). The rules live in [src/sim](src/sim/README.md).
 
 ## Run it
 
@@ -88,9 +88,9 @@ src/
     textures.ts               facades with lit windows, road markings, ground grain
     cameraRig.ts  followYaw.ts  the camera maths, and which side the follow camera starts on
     character.ts  cutaway.ts  the survivor's low-poly body and walk cycle; see-through occluders
-    zombies.ts  people.ts     the horde and the survivors, each as instanced meshes (walk cycle in the shader)
+    zombies.ts  people.ts     the horde and the people in the street, instanced meshes (walk cycle in the shader)
     effects.ts                tracers, flashes, blood, noise rings, the aim reticle
-    pickups.ts  helicopter.ts supply crates; the rescue helicopter
+    pickups.ts                supply crates: ammunition, first aid, food
     placeMarkers.ts           the outline, light column and door ring on buildings with a job
     placeStyle.ts             their colours (no Three.js, so the HUD can use them)
     bearings.ts               compass words and screen directions (pure, tested)
@@ -98,7 +98,7 @@ src/
   lib/                        sun position, formatters, sphere helpers, storage, url, hash, rng
   ui/                         Vue components (dropdown, legend, search, picks, card, CityView, GameHud, RadarScope...)
   sim/                        pure, seeded game rules: colliders, raycast, flow field, player, horde,
-                              places, civilians, game. See src/sim/README.md
+                              places, population, humans, game. See src/sim/README.md
   styles/                     tokens.css, base.css
 tests/                        Vitest
 scripts/                      check.ps1, editor-deps.ps1, fetch-city.mjs (OpenStreetMap extractor)
@@ -137,52 +137,70 @@ so the globe page stays light.
 
 ## The game
 
-Survive until the helicopter lands. The clock is five minutes. Save as many people as you can on the way.
+Stay alive as long as you can. There is no rescue and no cure: the outbreak is the whole story, and
+the clock at the top of the screen counts how long you have lasted.
+
+**The city is full of people.** About 30,000 of them, worked out from the real density of Tashkent
+(7,700 per square kilometre) and shared between the real buildings by size, height and kind: a tall
+block of flats holds hundreds, a house a handful, a shed nobody. Nearly everyone is indoors; a few
+percent are out in the street as individuals (drawn as dots from high up) who stroll about, run from
+zombies and gunfire, and make for the nearest door.
+
+**The outbreak spreads from person to person.** It starts in a few buildings far from you, with no
+zombies in the street at first, so the first minutes are quiet. Inside a building the turned bite the
+well, the bitten turn after about fourteen seconds, and once enough have turned they come out as
+zombies (some run for the street first). In the street a zombie that reaches someone bites them: they
+stagger on, sickly green, for seven seconds and then turn. Zombies also batter the doors of buildings
+with people behind them; when a door gives way they get in. Everything you see is a person who was
+somebody: the number of people still well (and bitten, and turned) is on the screen.
+
+**Hide and they lose you.** A zombie follows you only while it has a fresh sign: break the line of
+sight and it heads for where it last saw you, and gives up a couple of seconds after that. Hiding
+behind a door works, but it does not win the game.
 
 **Fighting**
 
 - **Aim and fire:** the mouse aims (the survivor turns to face it), holding the left button fires.
   The pistol has 15 rounds a magazine and 45 in reserve; `R` reloads (it also reloads by itself when
   empty). Bullets stop at walls. A zombie takes two pistol hits, a runner one.
+- **Out of ammunition?** Click anyway and you swing whatever you can lay hands on: slower and shorter
+  than a gun, three blows to fell a walker. Zombies you kill sometimes drop ammunition, food or first aid
+  (they were people once).
 - **Shove:** `Space` knocks back and stuns whatever is in front of you (every 1.6 seconds).
 - **Noise matters.** Zombies see in front of them and smell very close, but they also _hear_: a pistol
   shot carries about 60 m, sprinting about 16 m, walking about 5 m, standing still none. Rings on the
-  ground show how far each sound went. Zombies that lose you give up after a few seconds.
-- **Speed matters.** Walkers are slower than you walking. Runners are faster than a walk but slower
-  than a sprint. Sprinting is loud and tires you out; zombies hanging on slow you down.
-- **Waves:** a band appears out of sight every 40 seconds, bigger each time, already on your trail. In
-  the last 14 seconds the helicopter is heard and every zombie in earshot comes for you.
+  ground show how far each sound went. Gunfire also sends the people in the street running.
+- **Speed matters.** You walk at 3.4 m/s and sprint at 7.6 for about fourteen seconds; the stamina bar
+  refills after a pause. Walkers (2.3 m/s) are slower than you walking; runners (5.2) are faster than
+  a walk but slower than a sprint. Zombies hanging on slow you down.
+
+**Staying fed.** Hunger drains steadily; at zero you starve and nothing heals. Food crates and first aid
+lie about the streets, shops and clinics have more, and kills sometimes drop some.
 
 **Buildings with jobs.** A few real buildings are marked with a glowing outline and a column of light,
 each in a colour for its job. Stand at the ring on the street in front and press `F`:
 
-- **Radar** (blue, a few hundred metres off): power it up and a scope appears showing the horde, the
-  buildings and the people, with the direction and countdown of the next wave on its rim.
+- **Radar** (blue, a few hundred metres off): power it up and a scope appears showing the horde and the
+  buildings.
 - **Shelters** (teal): go inside to hide, heal to full and reload. You cannot move or shoot, and nothing
   can see or hear you, so ordinary pursuers give up after a few seconds. But zombies already on your
-  trail, which means every wave, keep coming to the door and batter it. When it gives way you are thrown
-  out hurt, the shelter is lost for good, and everyone behind it with you. A door with people inside
-  draws zombies even when you are not there. Hiding in the nearest shelter all game does not win.
-- **Supplies** (amber: shops and clinics): search once for ammunition or health.
+  trail keep coming to the door and batter it. When it gives way you are thrown out hurt and the
+  shelter is lost for good. Hunger keeps going indoors, so hiding all game does not work either.
+- **Supplies** (amber: shops and clinics): search once for ammunition, health or food.
 - **Armory** (orange): a shotgun. `1` and `2` switch guns; each keeps its own ammunition. Eight pellets in
   a wide cone: it kills close up, is weak at range and useless past 16 m, is slow to fire and to
   reload, and is louder than the pistol (75 m).
 
-**Survivors.** About ten people hide around the map, each with a green ring. Walk up to one and they
-follow you, a little slower than you walk and well behind when you sprint. Zombies go for them too, and
-hiding ones can be found by zombies that wander past. Take them into a shelter with you and they stay
-inside (leaving, you leave them), or keep them with you and bring them to the helicopter. At the end it
-takes the followers near it and everyone safe behind a door that held. The final card counts them.
+**Seeing it all.** From the free camera, or zoomed out, every zombie also shows as a red dot and every
+person in the street as a pale one; the radar scope shows the horde around you. Ground supplies have
+their own light columns, and health comes back a little by itself but only up to 60, only after a quiet
+spell.
 
-**Seeing it all.** From the free camera, or zoomed out, every zombie also shows as a red dot (brighter
-when hunting). Ground supplies (ammunition crates, first-aid kits) have their own light columns, and
-health comes back a little by itself but only up to 60, only after a quiet spell.
-
-Game options go on the link, all optional: `&seed=123` replays the same game (same zombies, supplies,
-survivors and waves), `&rescue=60` sets the clock in seconds, `&zombies=0` removes the zombies in the
-streets at the start (the number is groups; default 70), `&people=0` removes the survivors (default 10),
-`&waves=0` switches the waves off. `&debug=1` puts the scene on `window.__city.debug` with levers for
-staging scenes (spawn zombies, call survivors, jump the clock, teleport).
+Game options go on the link, all optional: `&seed=123` replays the same game (same outbreak, zombies
+and supplies), `&patients=3` is how many buildings the outbreak begins in (0 for a calm city),
+`&density=7700` is people per square kilometre, `&zombies=0` adds groups of zombies in the streets at
+the start. `&debug=1` puts the scene on `window.__city.debug` with levers for staging scenes (spawn
+zombies, put a crowd in the street, start an outbreak next to you, jump the clock, teleport).
 
 To make another city (or redo this one), run the extractor in Docker; it writes
 `public/cities/<id>.json` and prints what it found:

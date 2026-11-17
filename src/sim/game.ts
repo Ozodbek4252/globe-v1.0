@@ -1,23 +1,13 @@
-// The rules of one game: the survivor, the horde, the pistol, noise, supplies, waves, and the clock
-// to rescue. Pure and seeded: the same seed and the same inputs replay the same game. No DOM, no Three.js.
+// The rules of one game: the survivor, the city's people, the outbreak spreading through them, the guns,
+// noise, hunger, shelters. There is no rescue and no cure: the game goes on until the survivor dies, and
+// the score is how long that took. Pure and seeded: the same seed and the same inputs replay the same
+// game. No DOM, no Three.js.
 //
-// The horde is mutated in place (see horde.ts). Everything the picture needs to react to (a shot, a
-// kill, a hit taken) is queued as an event for the renderer to drain.
+// The horde and the people in the street are mutated in place (see horde.ts, humans.ts). Everything the
+// picture needs to react to (a shot, a kill, a hit taken) is queued as an event for the renderer to drain.
 
 import { createRng, nextFloat, nextInt, nextRange, type Rng } from '../lib/rng';
-import {
-  createCivilians,
-  CState,
-  evacuate,
-  hideCivilians,
-  hurtCivilian,
-  loseShelter,
-  occupants,
-  stepCivilians,
-  takeShelter,
-  type Civilians,
-} from './civilians';
-import { findSpawn, type Colliders } from './colliders';
+import type { Colliders } from './colliders';
 import {
   buildNavGrid,
   createFlowField,
@@ -27,21 +17,44 @@ import {
   type FlowField,
 } from './flow';
 import {
+  biteHuman,
+  createHumans,
+  HState,
+  spawnHuman,
+  stepHumans,
+  type HumanContext,
+  type Humans,
+} from './humans';
+import {
   createHorde,
   createTargets,
   damageZombie,
   isAlive,
-  sendHunting,
+  rebuildZombieIndex,
   shoveZombie,
   spawnZombie,
   stepHorde,
   ZKind,
+  ZOMBIE,
   ZState,
   type Horde,
   type Noise,
   type Targets,
 } from './horde';
 import { choosePlaces, PLACES, type Place, type PlaceBuilding } from './places';
+import {
+  batter,
+  biteInside,
+  createOutbreak,
+  indoorCounts,
+  POP,
+  roundSeeded,
+  seedOutbreak,
+  stepOutbreak,
+  takeIn,
+  type Outbreak,
+} from './population';
+import { createPointIndex, rebuildIndex, type PointIndex } from './spatial';
 import { createPlayer, speedOf, stepPlayer, PLAYER, type PlayerState } from './player';
 import { rayCircleHit, rayWallHit } from './raycast';
 import { validSpot, type GameWorld } from './world';
@@ -52,8 +65,6 @@ export type { GameWorld };
 
 /** Tuning, in metres, seconds and points of health. */
 export const GAME = {
-  /** Seconds until the helicopter lands. */
-  rescueAt: 300,
   health: 100,
   /** Health comes back by itself, slowly, but only up to this, and only after a quiet spell. */
   regenCap: 60,
@@ -109,19 +120,19 @@ export const GAME = {
     ttl: 0.5,
     shotTtl: 0.8,
   },
-  capacity: 1000,
-  clumps: 70,
-  /** Survivors hiding around the map at the start. */
-  civilians: 10,
-  waves: {
-    first: 20,
-    every: 40,
-    base: 6,
-    perWave: 3,
-    minRange: 90,
-    maxRange: 140,
-    runnerChance: 0.05,
-    runnerMax: 0.35,
+  /** The most zombies on the streets at once, and people in the street (the rest are indoors, counted). */
+  capacity: 4000,
+  streetPeople: 2500,
+  /** Zombies in the streets at the start. None: the outbreak starts indoors, somewhere far off. */
+  clumps: 0,
+  outbreak: {
+    /** Buildings where it begins, and how far from the survivor at least (metres). */
+    patients: 3,
+    minDistance: 350,
+    /** Of those who turn, the share that are runners. */
+    runners: 0.12,
+    /** Real-world people per square kilometre to spread over the city (Tashkent: about 2.6 million over 335 km²). */
+    density: 7700,
   },
   pickups: {
     ammo: 14,
@@ -153,9 +164,6 @@ export const GAME = {
   /** Zombies with their hands on you slow you down by this much each, to a floor. */
   grabSlow: 0.18,
   grabFloor: 0.4,
-  /** The helicopter is heard this many seconds before it lands, and every zombie in earshot comes. */
-  inbound: 14,
-  inboundNoise: 130,
   shelter: {
     /** How much battering a shelter's door takes, and how much of each blow lands on it (a hit is 9-14). */
     door: 600,
@@ -171,7 +179,8 @@ export const GAME = {
   },
 } as const;
 
-export type GameStatus = 'playing' | 'won' | 'lost';
+/** There is no winning: you play until you die. */
+export type GameStatus = 'playing' | 'lost';
 
 export type WeaponName = 'pistol' | 'shotgun';
 
@@ -243,20 +252,8 @@ export type GameEvent =
   | { type: 'leave'; place: number }
   /** The door of the shelter you are in took a beating; `fraction` of it is left (0 to 1). */
   | { type: 'door'; place: number; fraction: number }
-  /** The door gave way: the horde is in, and the shelter is lost, with `lost` people behind it. */
-  | { type: 'breach'; place: number; lost: number }
-  /** Someone hiding has joined the survivor: `following` is how many are with them now. */
-  | { type: 'recruit'; following: number }
-  /** `count` followers went into a shelter with the survivor. */
-  | { type: 'sheltered'; count: number; place: number }
-  /** Someone was killed (in the open) at this spot. */
-  | { type: 'civilianDown'; x: number; y: number }
-  /** The helicopter landed and took `count` people. */
-  | { type: 'saved'; count: number }
-  | { type: 'wave'; number: number; size: number; angle: number }
-  /** The helicopter is coming: `angle` is the direction it flies in from, `seconds` how long until it is here. */
-  | { type: 'rescue'; angle: number; seconds: number; x: number; y: number }
-  | { type: 'won' }
+  /** The door gave way: the horde is in, and the shelter is lost. */
+  | { type: 'breach'; place: number }
   | { type: 'lost' };
 
 export interface GameInput {
@@ -301,6 +298,7 @@ export function createGameWorld(
     colliders,
     nav,
     reachable: reachableFrom(nav, start[0], start[1]),
+    buildings,
     places: [],
   };
   world.places = choosePlaces(buildings, start, world);
@@ -311,14 +309,15 @@ export interface GameOptions {
   seed: number;
   startX: number;
   startY: number;
-  rescueAt?: number;
   /** Zombies in the streets at the start, as groups. 0 for none. */
   clumps?: number;
-  /** Turn the waves off (for tests). */
-  waves?: boolean;
   capacity?: number;
-  /** Survivors hiding around the map. 0 for none. */
-  civilians?: number;
+  /** False for a city with no people in it at all (for tests): no outbreak, no one in the street. */
+  population?: boolean;
+  /** Where the outbreak begins: how many buildings (0 for none; the city stays well). */
+  patients?: number;
+  /** People per square kilometre to spread over the city, from a real-world figure. */
+  density?: number;
 }
 
 export interface GameStats {
@@ -327,17 +326,23 @@ export interface GameStats {
   hits: number;
   damageTaken: number;
   shoves: number;
-  /** How many survivors have joined you, died, and been saved. */
-  recruited: number;
-  lost: number;
-  saved: number;
+}
+
+/** Who is in the city, and in what condition (people indoors and in the street together). */
+export interface Population {
+  /** Well, bitten and turning, and turned (the zombies on the streets and those still indoors). */
+  healthy: number;
+  bitten: number;
+  zombies: number;
+  /** The people the city had when the game began. */
+  initial: number;
 }
 
 export interface GameState {
   tick: number;
+  /** Seconds survived: the score. */
   time: number;
   status: GameStatus;
-  rescueAt: number;
   player: PlayerState;
   health: number;
   /** Seconds since last hurt. */
@@ -363,20 +368,26 @@ export interface GameState {
   noises: Noise[];
   stepTimer: number;
   pickups: Pickup[];
-  wave: number;
-  nextWave: number;
-  /** The direction (radians, counter-clockwise from east) the next wave will come from. */
-  waveAngle: number;
-  wavesOn: boolean;
   /** Which places have been used up: shops and the armory once searched, the radar once powered. */
   used: boolean[];
-  /** The people to save. */
-  civilians: Civilians;
-  /** What zombies can go for besides the survivor: each civilian, then each place's door. */
+  /** The city's people: indoors, counted per building, and in the street, as individuals. */
+  outbreak: Outbreak;
+  humans: Humans;
+  population: Population;
+  /**
+   * What zombies can go for besides the survivor: each person in the street (slots 0 to capacity - 1),
+   * then each building's door (capacity + the building's number), active while someone is behind it.
+   */
   targets: Targets;
-  /** Where the helicopter will land, once it has been heard. */
-  landing: [number, number] | null;
-  /** The radar is on, so the horde and the next wave are visible. */
+  /** Where the zombies and the doors are, for anyone who needs to know what is near. */
+  zombieIndex: PointIndex;
+  doorIndex: PointIndex;
+  humanContext: HumanContext;
+  /** For each building, the shelter (a place id) it is, or -1. */
+  shelterOf: Int16Array;
+  /** Seconds since the population was last counted. */
+  countTimer: number;
+  /** The radar is on, so the horde is visible. */
   radarOn: boolean;
   /** The shelter the survivor is in (a place id), or -1. */
   inside: number;
@@ -386,9 +397,6 @@ export interface GameState {
   breached: boolean[];
   /** Seconds since the last "door" event, so a beating does not flood the event queue. */
   doorEventTimer: number;
-  /** The helicopter has been heard and is on its way. */
-  inbound: boolean;
-  inboundTimer: number;
   stats: GameStats;
   events: GameEvent[];
   rng: Rng;
@@ -412,11 +420,53 @@ export function createGame(world: GameWorld, options: GameOptions): GameState {
   const rng = createRng(options.seed);
   const flow = createFlowField(world.nav);
   updateFlow(flow, options.startX, options.startY);
+  const half = world.colliders.half;
+
+  // The city's people: who lives where comes from the buildings, how many there are from a real density.
+  const withPeople = options.population ?? true;
+  const km2 = ((half * 2) / 1000) ** 2;
+  const outbreak = createOutbreak(
+    withPeople ? world.buildings : [],
+    world,
+    new Set(),
+    GAME.shelter.door,
+    (options.density ?? GAME.outbreak.density) * km2,
+  );
+  const horde = createHorde(options.capacity ?? GAME.capacity, (options.seed * 2654435761) >>> 0);
+  const humans = createHumans(withPeople ? GAME.streetPeople : 0, (options.seed * 40503 + 7) >>> 0);
+  const zombieIndex = createPointIndex(half, 10, horde.capacity);
+  const doorIndex = createPointIndex(half, 16, Math.max(1, outbreak.count));
+  rebuildIndex(
+    doorIndex,
+    outbreak.count,
+    outbreak.doorX,
+    outbreak.doorY,
+    (i) => !Number.isNaN(outbreak.doorX[i]),
+  );
+  const shelterOf = new Int16Array(outbreak.count).fill(-1);
+  for (const place of world.places) {
+    if (place.kind === 'shelter' && place.building < outbreak.count)
+      shelterOf[place.building] = place.id;
+  }
+  const humanContext: HumanContext = {
+    colliders: world.colliders,
+    nav: world.nav,
+    reachable: world.reachable,
+    horde,
+    zombies: zombieIndex,
+    doors: doorIndex,
+    outbreak,
+    noises: [],
+    px: options.startX,
+    py: options.startY,
+    onEnter: (b) => takeIn(outbreak, b),
+    onTurn: (x, y) => turnZombie(horde, rng, x, y),
+  };
+
   const g: GameState = {
     tick: 0,
     time: 0,
     status: 'playing',
-    rescueAt: options.rescueAt ?? GAME.rescueAt,
     player: createPlayer(options.startX, options.startY),
     health: GAME.health,
     sinceHurt: 99,
@@ -429,45 +479,83 @@ export function createGame(world: GameWorld, options: GameOptions): GameState {
     reloading: 0,
     fireCooldown: 0,
     shoveCooldown: 0,
-    horde: createHorde(options.capacity ?? GAME.capacity, (options.seed * 2654435761) >>> 0),
+    horde,
     flow,
     flowTimer: 0,
     flowCell: -1,
     noises: [],
     stepTimer: 0,
     pickups: [],
-    wave: 0,
-    nextWave: GAME.waves.first,
-    waveAngle: nextFloat(rng) * Math.PI * 2,
-    wavesOn: options.waves ?? true,
     used: world.places.map(() => false),
-    civilians: createCivilians(options.civilians ?? GAME.civilians),
-    targets: createTargets((options.civilians ?? GAME.civilians) + world.places.length),
-    landing: null,
+    outbreak,
+    humans,
+    population: { healthy: 0, bitten: 0, zombies: 0, initial: outbreak.initial },
+    targets: createTargets(humans.capacity + outbreak.count, half),
+    zombieIndex,
+    doorIndex,
+    humanContext,
+    shelterOf,
+    countTimer: 0,
     radarOn: false,
     inside: -1,
     doors: world.places.map((p) => (p.kind === 'shelter' ? GAME.shelter.door : 0)),
     breached: world.places.map(() => false),
     doorEventTimer: 0,
-    inbound: false,
-    inboundTimer: 0,
-    stats: {
-      kills: 0,
-      shots: 0,
-      hits: 0,
-      damageTaken: 0,
-      shoves: 0,
-      recruited: 0,
-      lost: 0,
-      saved: 0,
-    },
+    stats: { kills: 0, shots: 0, hits: 0, damageTaken: 0, shoves: 0 },
     events: [],
     rng,
   };
   scatterPickups(g, world);
   scatterClumps(g, world, options.clumps ?? GAME.clumps);
-  hideCivilians(g.civilians, world, rng, [options.startX, options.startY]);
+  scatterStreetPeople(g, world);
+  seedOutbreak(
+    outbreak,
+    rng,
+    options.patients ?? GAME.outbreak.patients,
+    [options.startX, options.startY],
+    GAME.outbreak.minDistance,
+  );
+  countPopulation(g);
   return g;
+}
+
+/** A zombie turns up where a bitten person fell: mostly a walker, now and then a runner. */
+function turnZombie(horde: Horde, rng: Rng, x: number, y: number): void {
+  const kind = nextFloat(rng) < GAME.outbreak.runners ? ZKind.RUNNER : ZKind.WALKER;
+  spawnZombie(horde, x, y, kind, ZState.WANDER);
+}
+
+/** The few percent of everyone who are out in the street at the start, each near their own door. */
+function scatterStreetPeople(g: GameState, world: GameWorld): void {
+  const { outbreak: o, humans, rng } = g;
+  for (let b = 0; b < o.count && humans.alive < humans.capacity; b++) {
+    if (o.healthy[b] <= 0) continue;
+    const want = roundSeeded(o.healthy[b] * POP.outdoors, rng);
+    // a big block puts a crowd out, who spread further from its door than a few from a house
+    const reach = 10 + 2.5 * Math.sqrt(want);
+    for (let k = 0; k < want && humans.alive < humans.capacity; k++) {
+      for (let tries = 0; tries < 6; tries++) {
+        const a = nextFloat(rng) * Math.PI * 2;
+        const r = nextRange(rng, 1.5, reach);
+        const x = o.doorX[b] + Math.cos(a) * r;
+        const y = o.doorY[b] + Math.sin(a) * r;
+        if (!validSpot(world, x, y, 0.6)) continue;
+        spawnHuman(humans, x, y, HState.WALK);
+        o.healthy[b]--;
+        break;
+      }
+    }
+  }
+}
+
+/** Count everyone: indoors and in the street. Done about once a second. */
+function countPopulation(g: GameState): void {
+  const inside = indoorCounts(g.outbreak);
+  let bitten = inside.incubating;
+  for (let i = 0; i < g.humans.used; i++) if (g.humans.state[i] === HState.BITTEN) bitten++;
+  g.population.healthy = inside.healthy + g.humans.alive;
+  g.population.bitten = bitten;
+  g.population.zombies = inside.undead + g.horde.alive;
 }
 
 /** Scatter groups of zombies across the map, none near the start. */
@@ -621,46 +709,6 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
       // outdoors, regain a little health after a quiet spell
       g.health = Math.min(GAME.regenCap, g.health + GAME.regenRate * dt);
     }
-
-    if (g.wavesOn && g.time >= g.nextWave) spawnWave(g, world);
-
-    // the people to save: they join you when you come near, and follow
-    const recruited = stepCivilians(
-      g.civilians,
-      { colliders, flow: g.flow, px: p.x, py: p.y, hidden: g.inside >= 0, playing: true },
-      dt,
-    );
-    if (recruited > 0) {
-      g.stats.recruited += recruited;
-      emit(g, { type: 'recruit', following: countFollowing(g) });
-    }
-
-    // the helicopter's engines carry for miles: for its last seconds, everything comes
-    if (g.time >= g.rescueAt - GAME.inbound) {
-      if (!g.inbound) {
-        g.inbound = true;
-        // it lands on open ground a little ahead of the way the survivor is facing
-        const [lx, ly] = findSpawn(
-          colliders,
-          [p.x + Math.cos(p.heading) * 11, p.y + Math.sin(p.heading) * 11],
-          35,
-          7,
-        );
-        g.landing = [lx, ly];
-        emit(g, {
-          type: 'rescue',
-          angle: nextFloat(g.rng) * Math.PI * 2,
-          seconds: GAME.inbound,
-          x: lx,
-          y: ly,
-        });
-      }
-      g.inboundTimer -= dt;
-      if (g.inboundTimer <= 0) {
-        addNoise(g, p.x, p.y, GAME.inboundNoise, 1.3);
-        g.inboundTimer = 1;
-      }
-    }
   }
 
   // the flow field the horde follows to reach the survivor
@@ -674,7 +722,15 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
     g.flowTimer = 0.25;
   }
 
-  refreshTargets(g, world, playing);
+  // everyone out in the street looks about and moves (where the zombies are is indexed first)
+  rebuildZombieIndex(g.horde, g.zombieIndex);
+  const hc = g.humanContext;
+  hc.px = g.player.x;
+  hc.py = g.player.y;
+  hc.noises = g.noises;
+  stepHumans(g.humans, hc, dt, g.tick);
+
+  refreshTargets(g);
   const damage = stepHorde(
     g.horde,
     {
@@ -693,76 +749,137 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
     g.tick,
   );
 
+  g.doorEventTimer = Math.max(0, g.doorEventTimer - dt);
+  // zombies that were after the survivor (indoors) hit the door they are behind...
+  if (playing && g.inside >= 0 && g.horde.doorDamage > 0) {
+    damageDoor(g, world, g.inside, g.horde.doorDamage);
+  }
+  // ...and those after other people bite them, or hit the doors that hide them
+  applyTargetDamage(g, world);
+
+  // once a second, the outbreak moves on inside the buildings
+  g.countTimer += dt;
+  if (g.countTimer >= 1) {
+    const seconds = g.countTimer;
+    g.countTimer = 0;
+    stepOutbreak(
+      g.outbreak,
+      seconds,
+      g.rng,
+      (b, n) => emitZombies(g, world, b, n),
+      (b, n) => emitHumans(g, world, b, n),
+    );
+    countPopulation(g);
+  }
+
   if (playing) {
-    g.doorEventTimer = Math.max(0, g.doorEventTimer - dt);
-    // zombies that were after the survivor (indoors) hit the door they are behind...
-    if (g.inside >= 0 && g.horde.doorDamage > 0) damageDoor(g, world, g.inside, g.horde.doorDamage);
-    // ...and those after other people hit them, or the doors that hide them
-    applyTargetDamage(g, world);
     if (damage > 0) hurt(g, damage, g.horde.lastHitX, g.horde.lastHitY);
     if (g.health <= 0) {
       g.health = 0;
       g.status = 'lost';
       g.player = { ...g.player, vx: 0, vy: 0, sprinting: false };
       emit(g, { type: 'lost' });
-    } else if (g.time >= g.rescueAt) {
-      g.status = 'won';
-      // the helicopter takes the followers near it and everyone safe behind a door that held
-      const [lx, ly] = g.landing ?? [g.player.x, g.player.y];
-      g.stats.saved = evacuate(g.civilians, lx, ly);
-      emit(g, { type: 'saved', count: g.stats.saved });
-      emit(g, { type: 'won' });
     }
   }
 }
 
-/** How many people are with the survivor now. */
-export function countFollowing(g: GameState): number {
-  let n = 0;
-  for (let i = 0; i < g.civilians.count; i++) if (g.civilians.state[i] === CState.FOLLOWING) n++;
-  return n;
-}
-
-/** Fill the target slots for this step: each person in the open, then each shelter door with someone behind it. */
-function refreshTargets(g: GameState, world: GameWorld, playing: boolean): void {
+/**
+ * Fill the target slots for this step: each person out in the street, then (after them) each building's
+ * door for as long as anyone well is behind it, so the horde comes for the doors that matter.
+ */
+function refreshTargets(g: GameState): void {
   const t = g.targets;
-  const c = g.civilians;
-  for (let i = 0; i < c.count; i++) {
-    const live = playing && (c.state[i] === CState.HIDING || c.state[i] === CState.FOLLOWING);
-    t.active[i] = live ? 1 : 0;
-    t.x[i] = c.x[i];
-    t.y[i] = c.y[i];
+  const h = g.humans;
+  const o = g.outbreak;
+  for (let i = 0; i < h.used; i++) {
+    const s = h.state[i];
+    t.active[i] = s === HState.WALK || s === HState.FLEE ? 1 : 0;
+    t.x[i] = h.x[i];
+    t.y[i] = h.y[i];
   }
-  for (const place of world.places) {
-    const k = c.count + place.id;
-    const watched =
-      playing && place.kind === 'shelter' && !g.breached[place.id] && occupants(c, place.id) > 0;
-    t.active[k] = watched ? 1 : 0;
-    t.x[k] = place.x;
-    t.y[k] = place.y;
+  const base = h.capacity;
+  for (let b = 0; b < o.count; b++) {
+    const k = base + b;
+    t.active[k] = o.healthy[b] > 0 && !Number.isNaN(o.doorX[b]) ? 1 : 0;
+    t.x[k] = o.doorX[b];
+    t.y[k] = o.doorY[b];
   }
 }
 
 /** Apply what zombies did to the people and doors they went for, and clear it. */
 function applyTargetDamage(g: GameState, world: GameWorld): void {
   const t = g.targets;
-  const c = g.civilians;
-  for (let i = 0; i < c.count; i++) {
+  const h = g.humans;
+  const o = g.outbreak;
+  for (let i = 0; i < h.used; i++) {
     if (t.damage[i] <= 0) continue;
-    const x = c.x[i];
-    const y = c.y[i];
-    if (hurtCivilian(c, i, t.damage[i])) {
-      g.stats.lost++;
-      emit(g, { type: 'civilianDown', x, y });
-    }
     t.damage[i] = 0;
+    biteHuman(h, i);
   }
-  for (const place of world.places) {
-    const k = c.count + place.id;
-    if (t.damage[k] <= 0) continue;
-    if (!g.breached[place.id]) damageDoor(g, world, place.id, t.damage[k]);
-    t.damage[k] = 0;
+  const base = h.capacity;
+  const blow = ZOMBIE.kinds[ZKind.WALKER].damage;
+  for (let b = 0; b < o.count; b++) {
+    const dealt = t.damage[base + b];
+    if (dealt <= 0) continue;
+    t.damage[base + b] = 0;
+    const place = g.shelterOf[b];
+    if (place >= 0) {
+      // a shelter's door is the one the survivor uses too
+      if (!g.breached[place]) damageDoor(g, world, place, dealt);
+      else biteThrough(o, b, dealt, blow);
+    } else if (o.open[b] === 1) biteThrough(o, b, dealt, blow);
+    else batter(o, b, dealt);
   }
+}
+
+/** Zombies at an open door bite whoever is just inside, one person for each blow. */
+function biteThrough(o: Outbreak, b: number, dealt: number, blow: number): void {
+  const bites = Math.max(1, Math.round(dealt / blow));
+  for (let n = 0; n < bites; n++) if (!biteInside(o, b)) return;
+}
+
+/** Somewhere to stand in the street a few metres from (x, y), or null if none turns up. */
+function streetSpot(g: GameState, world: GameWorld, x: number, y: number): [number, number] | null {
+  for (let tries = 0; tries < 6; tries++) {
+    const a = nextFloat(g.rng) * Math.PI * 2;
+    const r = nextRange(g.rng, 1.2, 9);
+    const sx = x + Math.cos(a) * r;
+    const sy = y + Math.sin(a) * r;
+    if (validSpot(world, sx, sy, 0.6)) return [sx, sy];
+  }
+  return null;
+}
+
+/** A building's turned people come out into the street. Returns how many were placed. */
+function emitZombies(g: GameState, world: GameWorld, b: number, n: number): number {
+  const o = g.outbreak;
+  let placed = 0;
+  for (let k = 0; k < n; k++) {
+    const spot = streetSpot(g, world, o.doorX[b], o.doorY[b]);
+    if (!spot) break;
+    const kind = nextFloat(g.rng) < GAME.outbreak.runners ? ZKind.RUNNER : ZKind.WALKER;
+    if (spawnZombie(g.horde, spot[0], spot[1], kind, ZState.WANDER) < 0) break;
+    placed++;
+  }
+  return placed;
+}
+
+/** A building's well people run out into the street. Returns how many were placed. */
+function emitHumans(g: GameState, world: GameWorld, b: number, n: number): number {
+  const o = g.outbreak;
+  let placed = 0;
+  for (let k = 0; k < n; k++) {
+    const spot = streetSpot(g, world, o.doorX[b], o.doorY[b]);
+    if (!spot) break;
+    const i = spawnHuman(g.humans, spot[0], spot[1], HState.FLEE);
+    if (i < 0) break;
+    // away from the building, whichever way the door faces
+    const a = Math.atan2(spot[1] - o.doorY[b], spot[0] - o.doorX[b]);
+    g.humans.tx[i] = Math.cos(a);
+    g.humans.ty[i] = Math.sin(a);
+    placed++;
+  }
+  return placed;
 }
 
 /** Zombies are hitting a shelter's door. If it gives way they are in: everyone behind it is lost. */
@@ -784,9 +901,8 @@ function damageDoor(g: GameState, world: GameWorld, id: number, blows: number): 
 function breach(g: GameState, world: GameWorld, id: number): void {
   const place = world.places[id];
   g.breached[id] = true;
-  const lost = loseShelter(g.civilians, id);
-  g.stats.lost += lost;
-  emit(g, { type: 'breach', place: id, lost });
+  if (place.building < g.outbreak.count) g.outbreak.open[place.building] = 1; // whoever else is in there is now in reach
+  emit(g, { type: 'breach', place: id });
   if (g.inside === id) {
     g.inside = -1;
     hurt(g, GAME.shelter.breachDamage, place.x + place.nx, place.y + place.ny);
@@ -1082,9 +1198,6 @@ function interact(g: GameState, world: GameWorld): boolean {
       g.player = { ...g.player, vx: 0, vy: 0, sprinting: false };
       g.reloading = 0; // the reload is forgotten while the door closes: simpler than a half-finished one
       emit(g, { type: 'enter', place: place.id });
-      // everyone following you who is near the door goes in with you
-      const taken = takeShelter(g.civilians, place.id, place.x, place.y);
-      if (taken > 0) emit(g, { type: 'sheltered', count: taken, place: place.id });
     }
     return true;
   }
@@ -1135,65 +1248,4 @@ function interact(g: GameState, world: GameWorld): boolean {
     shotgun: false,
   });
   return true;
-}
-
-/** A band of zombies appears out of sight, some distance away, already on the survivor's trail. */
-function spawnWave(g: GameState, world: GameWorld): void {
-  const { rng, player: p, horde: h } = g;
-  const W = GAME.waves;
-  g.wave++;
-  g.nextWave += W.every;
-  const heading = g.waveAngle;
-  g.waveAngle = nextFloat(rng) * Math.PI * 2; // where the one after will come from
-  const size = W.base + W.perWave * g.wave;
-  const runner = Math.min(W.runnerMax, W.runnerChance * g.wave);
-
-  let sx = p.x;
-  let sy = p.y;
-  let angle = 0;
-  let found = false;
-  // The direction was settled when the last wave came (the radar shows it), so it comes from there:
-  // first from a spot the survivor cannot see, then from any spot that way, and only as a last resort
-  // from anywhere at all.
-  for (let attempt = 0; attempt < 80 && !found; attempt++) {
-    const aimed = attempt < 70;
-    const a = aimed ? heading + (nextFloat(rng) - 0.5) * 0.9 : nextFloat(rng) * Math.PI * 2;
-    const r = nextRange(rng, W.minRange, W.maxRange);
-    const x = p.x + Math.cos(a) * r;
-    const y = p.y + Math.sin(a) * r;
-    if (!validSpot(world, x, y, 1.5)) continue;
-    if (attempt < 40 && rayWallHit(world.colliders, p.x, p.y, x, y) === Infinity) continue;
-    sx = x;
-    sy = y;
-    angle = a;
-    found = true;
-  }
-  if (!found) return; // nowhere to come from this time; the next wave will do
-  let count = 0;
-  for (let k = 0; k < size; k++) {
-    for (let tries = 0; tries < 6; tries++) {
-      const a = nextFloat(rng) * Math.PI * 2;
-      const r = nextFloat(rng) * 5;
-      const x = sx + Math.cos(a) * r;
-      const y = sy + Math.sin(a) * r;
-      if (!validSpot(world, x, y, 0.6)) continue;
-      const i = spawnZombie(
-        h,
-        x,
-        y,
-        nextFloat(rng) < runner ? ZKind.RUNNER : ZKind.WALKER,
-        ZState.CHASE,
-      );
-      if (i < 0) break;
-      sendHunting(h, i, 70);
-      count++;
-      break;
-    }
-  }
-  if (count > 0) emit(g, { type: 'wave', number: g.wave, size: count, angle });
-}
-
-/** Seconds until rescue (never below zero). */
-export function rescueIn(g: GameState): number {
-  return Math.max(0, g.rescueAt - g.time);
 }
