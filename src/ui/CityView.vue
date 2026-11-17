@@ -18,7 +18,9 @@ import type {
   GameSetup,
   PlayerStatus,
   RadarFrame,
+  TiledCity,
 } from '../city/createCity';
+import type { CityData } from '../city/types';
 import { deleteSave, getSave, putSave } from '../lib/saves';
 import GameHud from './GameHud.vue';
 import RadarScope from './RadarScope.vue';
@@ -201,17 +203,26 @@ onMounted(async () => {
   root.value?.focus();
   try {
     // Three.js and the city code are only downloaded when the player enters the city.
-    const [{ loadCity, loadTileIndex, loadTiledWindow }, { createCityScene }] = await Promise.all([
-      import('../city/load'),
-      import('../city/createCity'),
-    ]);
-    const [data, resume] = await Promise.all([
-      (props.tiled
-        ? loadTileIndex(props.cityId).then((index) => loadTiledWindow(index, [0, 0], 1))
-        : loadCity(props.cityId)
-      ).then(markRaw),
-      getSave(props.cityId), // a game saved here earlier carries on where it left off
-    ]);
+    const [{ loadCity, loadTileIndex, createTileStore, savedWindowOrigin }, { createCityScene }] =
+      await Promise.all([import('../city/load'), import('../city/createCity')]);
+    // a game saved here earlier carries on where it left off (in a tiled city: in the window it was in)
+    const resume = await getSave(props.cityId);
+    let tiled: TiledCity | undefined;
+    let data: CityData;
+    if (props.tiled) {
+      const index = await loadTileIndex(props.cityId);
+      const store = createTileStore(index);
+      const [ox, oy] = savedWindowOrigin(resume);
+      const [tx, ty] = [Math.round(ox / index.tileSize), Math.round(oy / index.tileSize)];
+      data = markRaw(await store.window(tx, ty));
+      tiled = {
+        index,
+        loadWindow: (x, y) => store.window(x, y).then(markRaw),
+        prefetch: (x, y) => store.prefetch(x, y),
+      };
+    } else {
+      data = markRaw(await loadCity(props.cityId));
+    }
     if (disposed || !host.value) return;
     const link = linkOptions();
     if (link.hour !== undefined) hour.value = link.hour;
@@ -220,6 +231,7 @@ onMounted(async () => {
       view: link.view,
       camera: link.camera,
       player: link.player,
+      tiled,
       game: { ...link.game, density: link.game?.density ?? props.density, resume },
       debug: link.debug,
       onProgress: (fraction, label) => {

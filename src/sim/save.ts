@@ -17,9 +17,10 @@ import {
 } from './game';
 import type { Noise } from './horde';
 import type { PlayerState } from './player';
+import type { LedgerEntry } from './window';
 
 /** The arrays and counters of one of the in-place structures (the horde, the people, the buildings). */
-type SavedArrays = Record<string, ArrayBufferView | number>;
+export type SavedArrays = Record<string, ArrayBufferView | number>;
 
 export interface SavedGame {
   version: 1;
@@ -60,12 +61,17 @@ export interface SavedGame {
   horde: SavedArrays;
   humans: SavedArrays;
   outbreak: SavedArrays;
+  /**
+   * For a game in a window of a bigger city: where the window's centre is (metres east and north of
+   * the city's origin), and what the outbreak has done to every building the game has held.
+   */
+  city?: { origin: [number, number]; ledger: [number, LedgerEntry][] };
 }
 
 /** Scratch space, things rebuilt each step, and things fixed by the map: not worth saving. */
 const NOT_SAVED = new Set(['grid', 'rng', 'pushed', 'capacity']);
 
-function packArrays(thing: object): SavedArrays {
+export function packArrays(thing: object): SavedArrays {
   const out: SavedArrays = {};
   for (const [key, value] of Object.entries(thing)) {
     if (NOT_SAVED.has(key)) continue;
@@ -77,7 +83,7 @@ function packArrays(thing: object): SavedArrays {
   return out;
 }
 
-function unpackArrays(thing: object, saved: SavedArrays): void {
+export function unpackArrays(thing: object, saved: SavedArrays): void {
   const target = thing as Record<string, unknown>;
   for (const [key, value] of Object.entries(saved)) {
     if (key === 'rngState') {

@@ -351,6 +351,13 @@ function kill(h: Horde, i: number): void {
   h.alive--;
 }
 
+/** Take a zombie out of the world, alive or dead (it is not killed: nothing is dropped and nothing is counted). */
+export function removeZombie(h: Horde, i: number): void {
+  if (h.state[i] === ZState.FREE) return;
+  if (h.state[i] < ZState.DEAD) h.alive--;
+  release(h, i);
+}
+
 function release(h: Horde, i: number): void {
   h.state[i] = ZState.FREE;
   h.freeList[h.freeCount++] = i;

@@ -1,6 +1,7 @@
 import { fetchJson, type JsonLoader } from '../map/data';
 import { publicUrl } from '../lib/url';
-import { mergeTiles, parseTileIndex, tileAt, windowTiles, type TileIndex } from './tiles';
+import { isSavedGame } from '../sim/save';
+import { mergeTiles, parseTileIndex, tileAt, tileKey, windowTiles, type TileIndex } from './tiles';
 import type { CityData } from './types';
 
 /** Check that something loaded is in the format this code reads. */
@@ -37,6 +38,57 @@ export async function loadTileIndex(id: string, load: JsonLoader = fetchJson): P
   const index = parseTileIndex(await load(`cities/${id}/index.json`));
   if (!index) throw new Error(`The tile index for "${id}" is not in the expected format.`);
   return index;
+}
+
+/**
+ * Where a saved game's window was (metres east and north of the city's origin), or the city's origin
+ * for a save from a map that stands alone, or anything that is not a save.
+ */
+export function savedWindowOrigin(saved: unknown): [number, number] {
+  return isSavedGame(saved) && saved.city ? saved.city.origin : [0, 0];
+}
+
+/** Tiles fetched once and kept, and windows made of them. */
+export interface TileStore {
+  index: TileIndex;
+  /** The window round tile (tx, ty), from the cache where it can be. */
+  window(tx: number, ty: number, radius?: number): Promise<CityData>;
+  /** Start fetching the tiles of the window round (tx, ty); nothing waits for it. */
+  prefetch(tx: number, ty: number, radius?: number): void;
+}
+
+export function createTileStore(index: TileIndex, loaders: TiledLoaders = {}): TileStore {
+  const load = loaders.gzip ?? fetchGzipJson;
+  const have = new Map(index.tiles.map((t) => [tileKey(t.tx, t.ty), t]));
+  const cache = new Map<string, Promise<CityData>>();
+  const tile = (tx: number, ty: number): Promise<CityData> | null => {
+    const key = tileKey(tx, ty);
+    const entry = have.get(key);
+    if (!entry) return null; // open ground
+    let pending = cache.get(key);
+    if (!pending) {
+      pending = load(`cities/${index.id}/${entry.file}`).then((raw) =>
+        asCityData(raw, `${index.id} ${key}`),
+      );
+      pending.catch(() => cache.delete(key)); // a failed fetch can be tried again
+      cache.set(key, pending);
+    }
+    return pending;
+  };
+  const tilesOf = (tx: number, ty: number, radius: number): Promise<CityData>[] =>
+    windowTiles(tx, ty, radius)
+      .map(([x, y]) => tile(x, y))
+      .filter((p): p is Promise<CityData> => p !== null);
+  return {
+    index,
+    async window(tx, ty, radius = 1) {
+      const tiles = await Promise.all(tilesOf(tx, ty, radius));
+      return mergeTiles(index, tiles, [tx * index.tileSize, ty * index.tileSize], radius);
+    },
+    prefetch(tx, ty, radius = 1) {
+      for (const p of tilesOf(tx, ty, radius)) p.catch(() => undefined);
+    },
+  };
 }
 
 /**

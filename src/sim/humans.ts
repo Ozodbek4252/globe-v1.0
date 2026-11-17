@@ -123,6 +123,11 @@ export function spawnHuman(h: Humans, x: number, y: number, state: number = HSta
   return i;
 }
 
+/** Take a person out of the street (they went somewhere this street does not see). */
+export function releaseHuman(h: Humans, i: number): void {
+  if (h.state[i] !== HState.FREE) release(h, i);
+}
+
 function release(h: Humans, i: number): void {
   if (h.state[i] !== HState.BITTEN) h.alive--;
   h.state[i] = HState.FREE;

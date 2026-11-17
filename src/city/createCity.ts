@@ -14,6 +14,7 @@ import {
   HemisphereLight,
   IcosahedronGeometry,
   InstancedMesh,
+  Group,
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
@@ -31,7 +32,7 @@ import {
 } from 'three';
 import { createEmitter, type Unsubscribe } from '../lib/emitter';
 import { utcOffsetHours } from '../lib/sun';
-import { buildColliders, findSpawn } from '../sim/colliders';
+import { buildColliders, findSpawn, type Colliders } from '../sim/colliders';
 import { DAY, nightness, wrapHour } from '../sim/daylight';
 import {
   createGame,
@@ -46,6 +47,7 @@ import {
   type GameEvent,
   type GameInput,
   type GameOptions,
+  type GameWorld,
   type GameState,
   type GameStatus,
   type WeaponName,
@@ -54,6 +56,8 @@ import { sendHunting, spawnZombie, ZKind, ZState } from '../sim/horde';
 import { HState, spawnHuman } from '../sim/humans';
 import { speedOf, type PlayerState } from '../sim/player';
 import { isSavedGame, loadGame, saveGame, type SavedGame } from '../sim/save';
+import { migrateGame, type Ledger } from '../sim/window';
+import { tileAt, type TileIndex } from './tiles';
 import type { PlaceKind } from '../sim/places';
 import { compassName, screenAngle, screenOffset } from './bearings';
 import { createSurvivor } from './character';
@@ -101,7 +105,7 @@ import {
   createRoadTexture,
 } from './textures';
 import { TREE_STRIDE, placeTrees, type TreeSet } from './trees';
-import type { CityData } from './types';
+import type { CityData, CityTower } from './types';
 
 const FOV = 42;
 /** The scene's clock is local time on a fixed autumn day, so the sun is repeatable. */
@@ -250,6 +254,8 @@ export interface CityDebug {
   hurt(amount: number): void;
   /** Set the hour of the day (0-24). */
   setClock(hour: number): void;
+  /** Of a tiled city: where the window's centre is (metres east and north of the city's origin), and which tile. */
+  window(): { origin: [number, number]; tile: [number, number]; buildings: number } | null;
   /** Jump the game clock forward. */
   skip(seconds: number): void;
   /** Set the game clock to an exact time. */
@@ -306,6 +312,15 @@ export interface GameSetup {
   resume?: unknown;
 }
 
+/** A city in tiles, as the scene needs it: the index, and the windows round any tile. */
+export interface TiledCity {
+  index: TileIndex;
+  /** The window of tiles round (tx, ty), as one map with its own centre as origin. */
+  loadWindow(tx: number, ty: number): Promise<CityData>;
+  /** Start fetching the window round (tx, ty), so it is at hand when needed. */
+  prefetch(tx: number, ty: number): void;
+}
+
 export interface CityOptions {
   /** Local hour (0-24) the game starts at; the day then goes by as you play. Default is morning. */
   hour?: number;
@@ -318,6 +333,8 @@ export interface CityOptions {
   /** Skip the fly-in and the camera easing. Defaults to the user's reduced-motion setting. */
   reducedMotion?: boolean;
   game?: GameSetup;
+  /** For a city in tiles: `data` is the window round the start, and this fetches the next ones. */
+  tiled?: TiledCity;
   /** Add the `debug` levers to the scene. */
   debug?: boolean;
   onProgress?: (fraction: number, label: string) => void;
@@ -560,87 +577,185 @@ export async function createCityScene(
       fog: false,
     }),
   );
-  const wallGeometry = own(new PlaneGeometry(half * 2, 26));
-  const sides: [number, number, number][] = [
-    [0, -half, 0],
-    [0, half, 0],
-    [-half, 0, Math.PI / 2],
-    [half, 0, Math.PI / 2],
-  ];
-  for (const [x, z, ry] of sides) {
-    const wall = new Mesh(wallGeometry, perimeterMaterial);
-    wall.position.set(x, 13, z);
-    wall.rotation.y = ry;
-    wall.renderOrder = 5;
-    scene.add(wall);
+  // aviation beacons on the tall towers
+  const beaconMaterial = own(new MeshBasicMaterial({ color: 0xff2a1a, fog: false }));
+  const beaconGeometry = own(new SphereGeometry(1.5, 12, 8));
+
+  // ---------- the district: everything built from one map, so that a new window can replace it ----------
+  interface District {
+    group: Group;
+    colliders: Colliders;
+    world: GameWorld;
+    /** Where the survivor stands (or stood when this district was built). */
+    spawn: [number, number];
+    placeMarkers: ReturnType<typeof createPlaceMarkers>;
+    lamps: ReturnType<typeof buildLampMeshes>;
+    /** How many trees were planted. */
+    trees: number;
+    beacons: Mesh[];
+    landmark: CityTower | undefined;
+    dispose(): void;
   }
 
-  // ---------- the city ----------
-  progress(0.08, 'Raising buildings');
-  const tiles = chunkBuildings(data.buildings, 250);
-  for (let i = 0; i < tiles.length; i++) {
-    const { walls, roofs } = buildBuildings(tiles[i]);
-    const wallMesh = new Mesh(own(toGeometry(walls)), wallMaterial);
-    const roofMesh = new Mesh(own(toGeometry(roofs)), roofMaterial);
-    for (const m of [wallMesh, roofMesh]) {
-      m.castShadow = true;
+  /**
+   * Build the buildings, roads, ground, trees, lamps, towers and the collision world of one map,
+   * yielding a frame now and then so the page stays alive. `near` is where the survivor is to stand
+   * (null: beside the tallest tower, or the middle); `report` shows progress (the first time only).
+   */
+  async function buildDistrict(
+    map: CityData,
+    near: [number, number] | null,
+    report: boolean,
+  ): Promise<District> {
+    const owned: { dispose(): void }[] = [];
+    const keep = <T extends { dispose(): void }>(thing: T): T => {
+      owned.push(thing);
+      return thing;
+    };
+    const say = (fraction: number, label: string): void => {
+      if (report) progress(fraction, label);
+    };
+    const group = new Group();
+    const mapHalf = map.halfSize;
+
+    // the quarantine perimeter: a faint glowing wall around the edge of a map that stands alone (a
+    // window of a bigger city has no edge, only more city beyond the fog)
+    if (!map.origin) {
+      const wallGeometry = keep(new PlaneGeometry(mapHalf * 2, 26));
+      const sides: [number, number, number][] = [
+        [0, -mapHalf, 0],
+        [0, mapHalf, 0],
+        [-mapHalf, 0, Math.PI / 2],
+        [mapHalf, 0, Math.PI / 2],
+      ];
+      for (const [x, z, ry] of sides) {
+        const wall = new Mesh(wallGeometry, perimeterMaterial);
+        wall.position.set(x, 13, z);
+        wall.rotation.y = ry;
+        wall.renderOrder = 5;
+        group.add(wall);
+      }
+    }
+
+    say(0.08, 'Raising buildings');
+    const chunks = chunkBuildings(map.buildings, 250);
+    for (let i = 0; i < chunks.length; i++) {
+      const { walls, roofs } = buildBuildings(chunks[i]);
+      const wallMesh = new Mesh(keep(toGeometry(walls)), wallMaterial);
+      const roofMesh = new Mesh(keep(toGeometry(roofs)), roofMaterial);
+      for (const m of [wallMesh, roofMesh]) {
+        m.castShadow = true;
+        m.receiveShadow = true;
+        group.add(m);
+      }
+      if (i % 4 === 3) {
+        say(0.08 + 0.5 * ((i + 1) / chunks.length), 'Raising buildings');
+        await nextFrame();
+      }
+    }
+
+    say(0.6, 'Laying roads');
+    const roads = buildRoads(map.roads);
+    for (const [mesh, material, z] of [
+      [roads.paths, pathMaterial, 1],
+      [roads.minor, minorRoadMaterial, 2],
+      [roads.major, majorRoadMaterial, 3],
+    ] as const) {
+      const m = new Mesh(keep(toGeometry(mesh)), material);
       m.receiveShadow = true;
-      scene.add(m);
+      m.renderOrder = z;
+      group.add(m);
     }
-    if (i % 4 === 3) {
-      progress(0.08 + 0.5 * ((i + 1) / tiles.length), 'Raising buildings');
-      await nextFrame();
+    const ground = buildGround(map.areas, map.waterways);
+    const land = new Mesh(keep(toGeometry(ground.land)), landMaterial);
+    land.receiveShadow = true;
+    group.add(land);
+    const water = new Mesh(keep(toGeometry(ground.water)), waterMaterial);
+    water.receiveShadow = true;
+    group.add(water);
+    await nextFrame();
+
+    say(0.72, 'Planting trees');
+    const occupancy = buildOccupancy(map, 2);
+    const lampSet = placeLamps(map, occupancy); // lamps first, so trees keep clear of them
+    const lamps = buildLampMeshes(lampSet, glowTexture, keep);
+    group.add(lamps.group);
+    const treeSet = placeTrees(map, occupancy);
+    group.add(buildTreeMeshes(treeSet, keep, cutaway));
+    await nextFrame();
+
+    // landmarks: the tall towers, with beacons on them
+    if (map.towers.length > 0) {
+      const towers = new Mesh(keep(toGeometry(buildTowers(map.towers))), towerMaterial);
+      towers.castShadow = true;
+      towers.receiveShadow = true;
+      group.add(towers);
     }
+    const beacons: Mesh[] = [];
+    for (const tower of map.towers) {
+      if (tower.height < 100) continue;
+      const beacon = new Mesh(beaconGeometry, beaconMaterial);
+      beacon.position.set(tower.x, tower.height + 1.2, -tower.y);
+      group.add(beacon);
+      beacons.push(beacon);
+    }
+
+    say(0.8, 'Finding a place to stand');
+    const colliders = buildColliders(map, [
+      { data: treeSet.data, stride: TREE_STRIDE, count: treeSet.count, radius: 0.35 },
+      { data: lampSet.data, stride: LAMP_STRIDE, count: lampSet.count, radius: 0.15 },
+    ]);
+    const landmark = map.towers.find((t) => t.height >= 100);
+    const spawn = findSpawn(
+      colliders,
+      near ?? (landmark ? [landmark.x, landmark.y] : [0, 0]),
+      200,
+      near ? 1.5 : 5,
+    );
+    const world = createGameWorld(colliders, spawn, map.buildings);
+    const placeMarkers = keep(
+      createPlaceMarkers(
+        world.places,
+        world.places.map((p) => map.buildings[p.building].outer),
+      ),
+    );
+    group.add(placeMarkers.object);
+    return {
+      group,
+      colliders,
+      world,
+      spawn,
+      placeMarkers,
+      trees: treeSet.count,
+      lamps,
+      beacons,
+      landmark,
+      dispose() {
+        for (const d of owned) d.dispose();
+      },
+    };
   }
 
-  progress(0.6, 'Laying roads');
-  const roads = buildRoads(data.roads);
-  for (const [mesh, material, z] of [
-    [roads.paths, pathMaterial, 1],
-    [roads.minor, minorRoadMaterial, 2],
-    [roads.major, majorRoadMaterial, 3],
-  ] as const) {
-    const m = new Mesh(own(toGeometry(mesh)), material);
-    m.receiveShadow = true;
-    m.renderOrder = z;
-    scene.add(m);
-  }
-  const ground = buildGround(data.areas, data.waterways);
-  const land = new Mesh(own(toGeometry(ground.land)), landMaterial);
-  land.receiveShadow = true;
-  scene.add(land);
-  const water = new Mesh(own(toGeometry(ground.water)), waterMaterial);
-  water.receiveShadow = true;
-  scene.add(water);
-  await nextFrame();
-
-  progress(0.72, 'Planting trees');
-  const occupancy = buildOccupancy(data, 2);
-  const lampSet = placeLamps(data, occupancy); // lamps first, so trees keep clear of them
-  const lamps = buildLampMeshes(lampSet, glowTexture, own);
-  scene.add(lamps.group);
-  const treeSet = placeTrees(data, occupancy);
-  scene.add(buildTreeMeshes(treeSet, own, cutaway));
-  await nextFrame();
-
-  // ---------- the survivor ----------
-  progress(0.8, 'Finding a place to stand');
-  const colliders = buildColliders(data, [
-    { data: treeSet.data, stride: TREE_STRIDE, count: treeSet.count, radius: 0.35 },
-    { data: lampSet.data, stride: LAMP_STRIDE, count: lampSet.count, radius: 0.15 },
-  ]);
-  const landmark = data.towers.find((t) => t.height >= 100);
-  const startNear: [number, number] = options.player
-    ? [options.player.x, options.player.y]
-    : landmark
-      ? [landmark.x, landmark.y]
-      : [0, 0];
-  const [spawnX, spawnY] = findSpawn(colliders, startNear, 200, options.player ? 1.5 : 5);
+  let district = await buildDistrict(
+    data,
+    options.player ? [options.player.x, options.player.y] : null,
+    true,
+  );
+  scene.add(district.group);
+  let colliders = district.colliders;
+  let [spawnX, spawnY] = district.spawn;
 
   // ---------- the game: the city's people, the outbreak, the pistol, supplies ----------
   progress(0.82, 'Gathering the city');
-  const gameWorld = createGameWorld(colliders, [spawnX, spawnY], data.buildings);
+  let gameWorld = district.world;
   const setup = options.game ?? {};
+  // a window of a bigger city: where it sits, and what the outbreak has done to every building the
+  // game has ever held (buildings keep their state when their tile is not loaded)
+  const tiled = options.tiled ?? null;
+  let origin: [number, number] = data.origin ?? [0, 0];
+  const ledger: Ledger = new Map(
+    isSavedGame(setup.resume) && setup.resume.city ? setup.resume.city.ledger : [],
+  );
   let seed = setup.seed ?? Math.floor(Math.random() * 0xffffffff);
   // the day: it starts at this hour and goes by as you play, an hour a minute; the game needs to know
   // when the sun rises and sets over this place, since that is when the dead are at their worst
@@ -696,13 +811,8 @@ export async function createCityScene(
   scene.add(effects.object);
   const pickupMarkers: PickupMarkers = createPickupMarkers(GAME.pickups.max);
   scene.add(pickupMarkers.object);
-  const placeMarkers = createPlaceMarkers(
-    gameWorld.places,
-    gameWorld.places.map((p) => data.buildings[p.building].outer),
-  );
-  own(placeMarkers);
-  scene.add(placeMarkers.object);
-  const markerSpent: boolean[] = gameWorld.places.map(() => false);
+  let placeMarkers = district.placeMarkers;
+  let markerSpent: boolean[] = gameWorld.places.map(() => false);
   let downAmount = 0;
   let gamePhase: GameStatus = 'playing';
   // a flashlight for the dark
@@ -712,27 +822,8 @@ export async function createCityScene(
   let flashlightPref: 'auto' | 'on' | 'off' = 'auto';
   await nextFrame();
 
-  progress(0.85, 'Landmarks');
-  if (data.towers.length > 0) {
-    const towers = new Mesh(own(toGeometry(buildTowers(data.towers))), towerMaterial);
-    towers.castShadow = true;
-    towers.receiveShadow = true;
-    scene.add(towers);
-  }
-  // aviation beacons on the tall towers
-  const beaconMaterial = own(new MeshBasicMaterial({ color: 0xff2a1a, fog: false }));
-  const beaconGeometry = own(new SphereGeometry(1.5, 12, 8));
-  const beacons: Mesh[] = [];
-  for (const tower of data.towers) {
-    if (tower.height < 100) continue;
-    const beacon = new Mesh(beaconGeometry, beaconMaterial);
-    beacon.position.set(tower.x, tower.height + 1.2, -tower.y);
-    scene.add(beacon);
-    beacons.push(beacon);
-  }
-
   // ---------- camera rig ----------
-  const tower = data.towers.find((t) => t.height >= 100);
+  let tower = district.landmark;
   const home: Rig = {
     x: tower ? tower.x : 0,
     z: tower ? -tower.y + 40 : 0,
@@ -828,7 +919,7 @@ export async function createCityScene(
     fill.color.setRGB(...palette.hemiSky);
     fill.intensity = palette.fillIntensity;
     fill.position.set(-lightDirection.x, 0.5, -lightDirection.z).normalize().multiplyScalar(100);
-    lamps.setGlow(palette.windowGlow);
+    district.lamps.setGlow(palette.windowGlow);
     darkness = palette.windowGlow;
     renderer.toneMappingExposure = palette.exposure;
     wallMaterial.emissiveIntensity = palette.windowGlow * 1.1;
@@ -1095,10 +1186,70 @@ export async function createCityScene(
   }
 
   /** Begin a new game from the start: a fresh horde, supplies and clock, and the survivor back at the spawn. */
+  // ---------- a window of a bigger city: moving it as the survivor walks ----------
+  let shifting = false;
+  /** Called each frame: is it time to move the window, or to have the next one ready? */
+  function watchWindow(): void {
+    if (!tiled) return;
+    const [cx, cy] = tileAt(tiled.index, origin[0], origin[1]);
+    const [tx, ty] = tileAt(tiled.index, player.x + origin[0], player.y + origin[1]);
+    if (tx !== cx || ty !== cy) {
+      void shiftWindow(tx, ty);
+      return;
+    }
+    // nearing an edge of the centre tile: have the window beyond it ready
+    const edge = tiled.index.tileSize / 2 - 200;
+    const ex = Math.abs(player.x) > edge ? Math.sign(player.x) : 0;
+    const ey = Math.abs(player.y) > edge ? Math.sign(player.y) : 0;
+    if (ex !== 0 || ey !== 0) tiled.prefetch(cx + ex, cy + ey);
+  }
+  /** Build the window round tile (tx, ty) while the game goes on, then swap it in and carry the game over. */
+  async function shiftWindow(tx: number, ty: number): Promise<void> {
+    if (!tiled) return;
+    shifting = true;
+    try {
+      const next = await tiled.loadWindow(tx, ty);
+      if (destroyed) return;
+      const newOrigin: [number, number] = next.origin ?? [0, 0];
+      const dx = origin[0] - newOrigin[0];
+      const dy = origin[1] - newOrigin[1];
+      const built = await buildDistrict(next, [player.x + dx, player.y + dy], false);
+      if (destroyed) {
+        built.dispose();
+        return;
+      }
+      scene.remove(district.group);
+      district.dispose();
+      scene.add(built.group);
+      game = migrateGame(game, gameWorld, built.world, gameOptions(), [dx, dy], ledger);
+      player = previous = game.player;
+      district = built;
+      colliders = built.colliders;
+      gameWorld = built.world;
+      placeMarkers = built.placeMarkers;
+      markerSpent = gameWorld.places.map(() => false);
+      tower = built.landmark;
+      origin = newOrigin;
+      spawnX += dx;
+      spawnY += dy;
+      goal = { ...goal, x: goal.x + dx, z: goal.z - dy };
+      current = { ...current, x: current.x + dx, z: current.z - dy };
+      home.x += dx;
+      home.z -= dy;
+      effects.clear();
+      applyTime(); // the new lamps take the glow of the hour
+    } finally {
+      shifting = false;
+    }
+  }
+
   function restart(fresh = true): void {
     if (!fresh && game.status === 'lost') {
-      // the city goes on: a new survivor in it, where the outbreak has got to
-      respawn(game, gameWorld, spawnX, spawnY);
+      // the city goes on: a new survivor in it, where the outbreak has got to. The start may be in a
+      // part of the city that is not loaded now: then the middle of the window is the start.
+      const startHere =
+        Math.abs(spawnX) < colliders.half - 50 && Math.abs(spawnY) < colliders.half - 50;
+      respawn(game, gameWorld, startHere ? spawnX : 0, startHere ? spawnY : 0);
       notices.emit({ type: 'respawn' });
     } else {
       seed = Math.floor(Math.random() * 0xffffffff);
@@ -1194,6 +1345,7 @@ export async function createCityScene(
       applyTime();
     }
     gamePhase = game.status;
+    if (tiled && !shifting && gamePhase === 'playing') watchWindow();
     const alpha = simClock / SIM_STEP;
     const px = lerp(previous.x, player.x, alpha);
     const py = lerp(previous.y, player.y, alpha);
@@ -1410,7 +1562,7 @@ export async function createCityScene(
 
     // blink the beacons
     const on = Math.sin(now / 420) > 0.2;
-    for (const b of beacons) b.visible = on;
+    for (const b of district.beacons) b.visible = on;
 
     renderer.render(scene, camera);
 
@@ -1421,7 +1573,7 @@ export async function createCityScene(
         drawCalls: renderer.info.render.calls,
         triangles: renderer.info.render.triangles,
         buildings: data.buildings.length,
-        trees: treeSet.count,
+        trees: district.trees,
         zombies: game.horde.alive,
         zombiesDrawn: zombies.drawn(),
       });
@@ -1469,7 +1621,11 @@ export async function createCityScene(
     onGame: notices.on,
     onRadar: radarFrames.on,
     onZoomOut: zoomOutEvents.on,
-    save: () => saveGame(game, gameOptions()),
+    save: () => {
+      const saved = saveGame(game, gameOptions());
+      if (tiled) saved.city = { origin, ledger: [...ledger] };
+      return saved;
+    },
     restart,
     setPaused(p) {
       paused = p && game.status === 'playing';
@@ -1561,6 +1717,14 @@ export async function createCityScene(
           },
           hurt(amount) {
             game.health -= amount;
+          },
+          window() {
+            if (!tiled) return null;
+            return {
+              origin: [...origin] as [number, number],
+              tile: tileAt(tiled.index, origin[0], origin[1]),
+              buildings: gameWorld.buildings.length,
+            };
           },
           setClock(hour) {
             game.clock = wrapHour(hour);
