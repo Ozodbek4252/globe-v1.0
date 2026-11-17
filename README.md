@@ -85,11 +85,13 @@ src/
     trees.ts  lamps.ts        deterministic trees and street lamps; occupancy.ts for placement
     sunlight.ts  sky.ts       the real sun at Tashkent, sky colours, sky dome
     textures.ts               facades with lit windows, road markings, ground grain
-    cameraRig.ts              the strategy-game camera maths
+    cameraRig.ts  followYaw.ts  the camera maths, and which side the follow camera starts on
+    character.ts  cutaway.ts  the survivor's low-poly body and walk cycle; see-through occluders
     createCity.ts  load.ts    builds the scene and runs it; loads public/cities/<id>.json
   lib/                        sun position, formatters, sphere helpers, storage, url, hash
   ui/                         Vue components (dropdown, legend, search, picks, card, CityView, ...)
-  sim/                        grid.ts (occupancy grid); the rest is a placeholder (pure functions)
+  sim/                        pure, seeded game logic: grid.ts, colliders.ts (walls, trunks, water),
+                              player.ts (movement, stamina). The rest is still a placeholder
   styles/                     tokens.css, base.css
 tests/                        Vitest
 scripts/                      check.ps1, editor-deps.ps1, fetch-city.mjs (OpenStreetMap extractor)
@@ -106,12 +108,20 @@ TV Tower: about 3,800 real building footprints, roads, canals, parks and 500 map
 generated trees and street lamps. Three.js and the city code download only when you press the button,
 so the globe page stays light.
 
-- **Controls:** `W A S D` or drag to move, `Q E` or right-drag to turn, `R F` to tilt, wheel to zoom,
-  `T` for the TV tower, `H` for home, `P` for a performance panel, `Esc` back to the globe.
+- **The survivor:** you start on the street beside the TV tower and walk with `W A S D` (up the
+  screen is forward). `Shift` runs until you are out of breath; the stamina bar refills after a pause.
+  Walls, trees, lamp posts and water are solid; you slide along them, and bridges let you cross canals.
+  Buildings and trees that stand between the camera and the survivor dissolve so you never lose them.
+  At night a flashlight comes on by itself (`L` to override).
+- **Camera:** it follows the survivor from the side with the clearest view. `Q E` or drag turn it, `R F`
+  tilt, wheel zooms, `H` recentres. `V` switches to a free camera (`W A S D` or drag pan it, `T` jumps
+  to the TV tower), and `V` again returns to the survivor.
+- **Other keys:** `P` shows a performance panel, `Esc` goes back to the globe.
 - **Time of day:** a slider sets the real sun position over Tashkent (a fixed autumn date). Windows and
   street lamps light up as it gets dark.
-- **Deep links:** `/?hour=17.4&view=x,y,yaw,pitch,distance#city` opens at a given time and viewpoint
-  (metres east and north of the centre, degrees, metres).
+- **Deep links:** `/?hour=17.4&view=x,y,yaw,pitch,distance&player=x,y&camera=free#city` opens at a
+  given time, camera placement and survivor position (metres east and north of the centre, degrees,
+  metres). All parts are optional; `view` alone starts in the free camera.
 - **Heights:** OpenStreetMap tags a height for only about 5% of Tashkent's buildings, so the rest are
   estimated from the kind of building and its footprint. The estimate is deterministic.
 

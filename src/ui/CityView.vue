@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { markRaw, onBeforeUnmount, onMounted, ref, shallowRef, useTemplateRef } from 'vue';
-import type { CityScene, CityStats, CityViewpoint } from '../city/createCity';
+import type {
+  CameraMode,
+  CityScene,
+  CityStats,
+  CityViewpoint,
+  PlayerStatus,
+} from '../city/createCity';
 
 const props = defineProps<{ cityId: string; title: string }>();
 const emit = defineEmits<{ close: [] }>();
@@ -15,24 +21,39 @@ const hour = ref(17.4);
 const sunElevation = ref(0);
 const stats = shallowRef<CityStats | null>(null);
 const showStats = ref(false);
+const player = shallowRef<PlayerStatus | null>(null);
 
 let scene: CityScene | null = null;
 let disposed = false;
 let stopStats: (() => void) | null = null;
+let stopPlayer: (() => void) | null = null;
 
 /**
- * Optional deep link: ?hour=17.4&view=x,y,yaw,pitch,distance  (metres east/north of the centre,
- * degrees, metres). Handy for sharing a view or reproducing a screenshot.
+ * Optional deep link, handy for sharing a spot or reproducing a screenshot. Metres are east/north of
+ * the city centre; angles are degrees.
+ *   ?hour=17.4                        time of day
+ *   &view=x,y,yaw,pitch,distance      start with the free camera here
+ *   &player=x,y                       put the survivor near this point
+ *   &camera=free|follow               which camera to start with
  */
-function linkOptions(): { hour?: number; view?: CityViewpoint } {
+function linkOptions(): {
+  hour?: number;
+  view?: CityViewpoint;
+  camera?: CameraMode;
+  player?: { x: number; y: number };
+} {
   const q = new URLSearchParams(location.search);
-  const out: { hour?: number; view?: CityViewpoint } = {};
+  const out: ReturnType<typeof linkOptions> = {};
   const h = Number(q.get('hour'));
   if (q.has('hour') && Number.isFinite(h)) out.hour = Math.min(24, Math.max(0, h));
   const v = (q.get('view') ?? '').split(',').map(Number);
   if (v.length === 5 && v.every(Number.isFinite)) {
     out.view = { x: v[0], y: v[1], yaw: v[2], pitch: v[3], distance: v[4] };
   }
+  const p = (q.get('player') ?? '').split(',').map(Number);
+  if (p.length === 2 && p.every(Number.isFinite)) out.player = { x: p[0], y: p[1] };
+  const cam = q.get('camera');
+  if (cam === 'free' || cam === 'follow') out.camera = cam;
   return out;
 }
 
@@ -72,6 +93,8 @@ onMounted(async () => {
     const created = await createCityScene(host.value, data, {
       hour: hour.value,
       view: link.view,
+      camera: link.camera,
+      player: link.player,
       onProgress: (fraction, label) => {
         progress.value = fraction;
         status.value = label;
@@ -84,6 +107,7 @@ onMounted(async () => {
     scene = created;
     sunElevation.value = Math.round(created.sunElevation());
     stopStats = created.onStats((s) => (stats.value = s));
+    stopPlayer = created.onPlayer((s) => (player.value = s));
     ready.value = true;
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'The city could not be loaded.';
@@ -94,6 +118,7 @@ onBeforeUnmount(() => {
   disposed = true;
   window.removeEventListener('keydown', onKey);
   stopStats?.();
+  stopPlayer?.();
   scene?.destroy();
   scene = null;
 });
@@ -146,11 +171,41 @@ onBeforeUnmount(() => {
         >
       </div>
 
+      <div v-if="player" class="city-status">
+        <p class="city-mode" aria-live="polite">
+          {{ player.camera === 'follow' ? 'Following the survivor' : 'Free camera' }}
+          <span>· <kbd>V</kbd> switch</span>
+        </p>
+        <div
+          v-if="player.camera === 'follow'"
+          class="stamina"
+          :class="{ tired: player.exhausted, running: player.sprinting }"
+          role="progressbar"
+          aria-label="Stamina"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          :aria-valuenow="Math.round(player.stamina * 100)"
+        >
+          <i :style="{ width: Math.round(player.stamina * 100) + '%' }"></i>
+          <span>{{
+            player.exhausted ? 'Out of breath' : player.sprinting ? 'Running' : 'Stamina'
+          }}</span>
+        </div>
+      </div>
+
       <ul class="city-help" aria-label="Controls">
-        <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or drag: move</li>
-        <li><kbd>Q</kbd><kbd>E</kbd> or right-drag: turn</li>
-        <li><kbd>R</kbd><kbd>F</kbd>: tilt &nbsp; <kbd>Wheel</kbd>: zoom</li>
-        <li><kbd>T</kbd> TV tower &nbsp; <kbd>H</kbd> home &nbsp; <kbd>Esc</kbd> globe</li>
+        <template v-if="!player || player.camera === 'follow'">
+          <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk &nbsp; <kbd>Shift</kbd> run</li>
+          <li><kbd>Q</kbd><kbd>E</kbd> or drag: turn camera &nbsp; <kbd>Wheel</kbd> zoom</li>
+          <li><kbd>L</kbd> flashlight &nbsp; <kbd>V</kbd> free camera</li>
+          <li><kbd>H</kbd> recentre &nbsp; <kbd>Esc</kbd> globe</li>
+        </template>
+        <template v-else>
+          <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or drag: move camera</li>
+          <li><kbd>Q</kbd><kbd>E</kbd> or right-drag: turn &nbsp; <kbd>R</kbd><kbd>F</kbd> tilt</li>
+          <li><kbd>T</kbd> TV tower &nbsp; <kbd>V</kbd> back to survivor</li>
+          <li><kbd>H</kbd> home &nbsp; <kbd>Esc</kbd> globe</li>
+        </template>
       </ul>
 
       <p class="city-credit">
@@ -331,6 +386,64 @@ onBeforeUnmount(() => {
   text-align: center;
 }
 
+.city-status {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  pointer-events: none;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.8);
+}
+.city-mode {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.city-mode kbd {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid #2b3956;
+  background: #0f1729;
+  color: var(--ink);
+  font: 500 11px var(--f-mono);
+}
+.stamina {
+  position: relative;
+  width: min(260px, 60vw);
+  height: 16px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  overflow: hidden;
+  backdrop-filter: blur(6px);
+}
+.stamina i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, #c98a2a, var(--accent));
+  transition: width 0.1s linear;
+}
+.stamina.running i {
+  background: linear-gradient(90deg, #e2a250, #ffd27a);
+}
+.stamina.tired i {
+  background: #c9574d;
+}
+.stamina span {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font: 500 11px var(--f-mono);
+  letter-spacing: 0.06em;
+  color: var(--ink);
+  mix-blend-mode: normal;
+}
+
 .city-credit {
   position: absolute;
   right: 16px;
@@ -388,6 +501,9 @@ onBeforeUnmount(() => {
   }
   .city-help {
     display: none;
+  }
+  .city-status {
+    bottom: 44px;
   }
   .city-credit {
     left: 16px;

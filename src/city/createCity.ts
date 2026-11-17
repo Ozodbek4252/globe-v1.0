@@ -23,18 +23,25 @@ import {
   PlaneGeometry,
   Scene,
   SphereGeometry,
+  SpotLight,
   SRGBColorSpace,
   Vector3,
   WebGLRenderer,
   type Texture,
 } from 'three';
 import { createEmitter, type Unsubscribe } from '../lib/emitter';
+import { buildColliders, findSpawn } from '../sim/colliders';
+import { createPlayer, speedOf, stepPlayer, type PlayerState } from '../sim/player';
+import { createSurvivor } from './character';
+import { createCutaway, type Cutaway } from './cutaway';
+import { openestYaw } from './followYaw';
 import {
   MAX_DISTANCE,
   MAX_PITCH,
   MIN_DISTANCE,
   MIN_PITCH,
   ease,
+  groundAxes,
   keepInside,
   metresPerPixel,
   pan,
@@ -89,11 +96,32 @@ export interface CityViewpoint {
   distance?: number;
 }
 
+/** The camera either follows the survivor or flies free over the city. */
+export type CameraMode = 'follow' | 'free';
+
+/** What the HUD shows about the survivor. Fires about ten times a second. */
+export interface PlayerStatus {
+  x: number;
+  y: number;
+  /** Metres per second. */
+  speed: number;
+  /** 0 to 1. */
+  stamina: number;
+  exhausted: boolean;
+  sprinting: boolean;
+  flashlight: boolean;
+  camera: CameraMode;
+}
+
 export interface CityOptions {
   /** Local hour (0-24) to start at. Default is golden hour. */
   hour?: number;
-  /** Start from this viewpoint instead of the default one, with no fly-in. */
+  /** Start from this viewpoint instead of the default one, with no fly-in. Implies the free camera. */
   view?: CityViewpoint;
+  /** Which camera to start with. Default: follow the survivor (free when `view` is given). */
+  camera?: CameraMode;
+  /** Put the survivor near this point (city metres) instead of beside the TV tower. */
+  player?: { x: number; y: number };
   /** Skip the fly-in and the camera easing. Defaults to the user's reduced-motion setting. */
   reducedMotion?: boolean;
   onProgress?: (fraction: number, label: string) => void;
@@ -105,12 +133,17 @@ export interface CityScene {
   getHour(): number;
   /** The sun's height above the horizon in degrees, for display. */
   sunElevation(): number;
-  /** Look at a point in city metres (x east, y north). */
+  /** Look at a point in city metres (x east, y north). Switches to the free camera. */
   focus(x: number, y: number, distance?: number): void;
-  /** Fly back to the starting view. */
+  /** Bring the camera back to the survivor, or to the starting view in the free camera. */
   resetView(): void;
+  cameraMode(): CameraMode;
+  setCameraMode(mode: CameraMode): void;
+  toggleFlashlight(): void;
   /** Fires about twice a second. */
   onStats(listener: (stats: CityStats) => void): Unsubscribe;
+  /** Fires about ten times a second with the survivor's condition. */
+  onPlayer(listener: (status: PlayerStatus) => void): Unsubscribe;
   destroy(): void;
 }
 
@@ -243,6 +276,10 @@ export async function createCityScene(
   const roofMaterial = own(
     new MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 }),
   );
+  // buildings and trees that stand between the camera and the survivor dissolve (see cutaway.ts)
+  const cutaway = createCutaway();
+  cutaway.apply(wallMaterial);
+  cutaway.apply(roofMaterial);
   const towerMaterial = own(
     new MeshStandardMaterial({ vertexColors: true, roughness: 0.8, metalness: 0.05 }),
   );
@@ -365,7 +402,32 @@ export async function createCityScene(
   const lamps = buildLampMeshes(lampSet, glowTexture, own);
   scene.add(lamps.group);
   const treeSet = placeTrees(data, occupancy);
-  scene.add(buildTreeMeshes(treeSet, own));
+  scene.add(buildTreeMeshes(treeSet, own, cutaway));
+  await nextFrame();
+
+  // ---------- the survivor ----------
+  progress(0.8, 'Finding a place to stand');
+  const colliders = buildColliders(data, [
+    { data: treeSet.data, stride: TREE_STRIDE, count: treeSet.count, radius: 0.35 },
+    { data: lampSet.data, stride: LAMP_STRIDE, count: lampSet.count, radius: 0.15 },
+  ]);
+  const landmark = data.towers.find((t) => t.height >= 100);
+  const startNear: [number, number] = options.player
+    ? [options.player.x, options.player.y]
+    : landmark
+      ? [landmark.x, landmark.y]
+      : [0, 0];
+  const [spawnX, spawnY] = findSpawn(colliders, startNear, 200, options.player ? 1.5 : 5);
+  let player: PlayerState = createPlayer(spawnX, spawnY, Math.PI / 2);
+  let previous: PlayerState = player;
+  const survivor = createSurvivor();
+  scene.add(survivor.object);
+  survivor.place(player.x, player.y, player.heading, 0, 0, false);
+  // a flashlight for the dark
+  const flashlight = new SpotLight(0xfff1d6, 0, 70, 0.52, 0.65, 1.4);
+  flashlight.castShadow = false;
+  scene.add(flashlight, flashlight.target);
+  let flashlightPref: 'auto' | 'on' | 'off' = 'auto';
   await nextFrame();
 
   progress(0.85, 'Landmarks');
@@ -406,23 +468,60 @@ export async function createCityScene(
     if (preset.distance !== undefined)
       home.distance = clamp(preset.distance, MIN_DISTANCE, MAX_DISTANCE);
   }
+  // The follow camera sits behind and above the survivor, much closer than the overview.
+  const followView = { yaw: 0.35, pitch: (55 * Math.PI) / 180, distance: 28 };
+  // a deep link may set the angle and distance for the follow camera too
+  if (preset?.yaw !== undefined) followView.yaw = (preset.yaw * Math.PI) / 180;
+  if (preset?.pitch !== undefined)
+    followView.pitch = clamp((preset.pitch * Math.PI) / 180, MIN_PITCH, MAX_PITCH);
+  if (preset?.distance !== undefined)
+    followView.distance = clamp(preset.distance, MIN_DISTANCE, MAX_DISTANCE);
+  const FOLLOW_MAX_DISTANCE = 220;
+  let cameraMode: CameraMode = options.camera ?? (preset ? 'free' : 'follow');
+  const followRig = (): Rig => ({ x: player.x, z: -player.y, ...followView });
+  /** The follow camera on the side of the survivor with the clearest view (unless a link chose one). */
+  const recentred = (): Rig => {
+    const rig = followRig();
+    if (preset?.yaw !== undefined) return rig;
+    const flat = rig.distance * Math.cos(rig.pitch);
+    return { ...rig, yaw: openestYaw(colliders, player.x, player.y, flat, rig.yaw) };
+  };
+  followView.yaw = recentred().yaw;
+
   const skipIntro = reducedMotion || preset !== undefined;
-  let goal: Rig = { ...home };
+  let goal: Rig = cameraMode === 'follow' ? followRig() : { ...home };
   let current: Rig = skipIntro
-    ? { ...home }
+    ? { ...goal }
     : {
-        x: home.x,
-        z: home.z + 120,
-        yaw: home.yaw - 1.1,
+        x: goal.x,
+        z: goal.z + 120,
+        yaw: goal.yaw - 1.1,
         pitch: (62 * Math.PI) / 180,
         distance: 1000,
       };
   let easeRate = skipIntro ? 30 : 1.7; // slow for the fly-in, then snappy
   let introUntil = skipIntro ? 0 : performance.now() + 3800;
 
+  function setCameraMode(next: CameraMode): void {
+    if (next === cameraMode) return;
+    cameraMode = next;
+    introUntil = 0;
+    if (next === 'follow') {
+      goal = {
+        ...followRig(),
+        yaw: goal.yaw,
+        pitch: goal.pitch,
+        distance: Math.min(goal.distance, FOLLOW_MAX_DISTANCE, 40),
+      };
+    } else {
+      goal = { ...current }; // stay where the camera is; from here WASD pans it
+    }
+  }
+
   // ---------- time of day ----------
   let hour = options.hour ?? 17.4;
   let elevation = 0;
+  let darkness = 0; // 0 in daylight, 1 at night: drives the flashlight and the glow
   const lightDirection = new Vector3();
   const skyDirection = new Vector3();
 
@@ -448,6 +547,7 @@ export async function createCityScene(
     fill.intensity = palette.fillIntensity;
     fill.position.set(-lightDirection.x, 0.5, -lightDirection.z).normalize().multiplyScalar(100);
     lamps.setGlow(palette.windowGlow);
+    darkness = palette.windowGlow;
     renderer.toneMappingExposure = palette.exposure;
     wallMaterial.emissiveIntensity = palette.windowGlow * 1.1;
     sky.update(palette, skyDirection, camera, fog);
@@ -470,8 +570,13 @@ export async function createCityScene(
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     const k = e.key.toLowerCase();
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    if (k === 't' && tower) goal = { ...goal, x: tower.x, z: -tower.y + 40 };
-    else if (k === 'h' || k === 'home') goal = { ...home };
+    if (k === 'v') setCameraMode(cameraMode === 'follow' ? 'free' : 'follow');
+    else if (k === 'l') flashlightPref = flashlightOn() ? 'off' : 'on';
+    else if (k === 't' && tower) {
+      setCameraMode('free');
+      goal = { ...goal, x: tower.x, z: -tower.y + 40 };
+    } else if (k === 'h' || k === 'home')
+      goal = cameraMode === 'follow' ? recentred() : { ...home };
     else if (k === '+' || k === '=') goal = zoom(goal, 0.8);
     else if (k === '-' || k === '_') goal = zoom(goal, 1.25);
     else keys.add(k);
@@ -487,7 +592,8 @@ export async function createCityScene(
 
   const pointers = new Map<number, { x: number; y: number }>();
   const dragBy = (dx: number, dy: number, orbit: boolean): void => {
-    if (orbit) {
+    // following the survivor, there is nothing to pan, so any drag turns the camera
+    if (orbit || cameraMode === 'follow') {
       goal = rotate(goal, -dx * 0.005, dy * 0.004);
     } else {
       const mpp = metresPerPixel(goal, FOV, canvas.clientHeight);
@@ -540,6 +646,14 @@ export async function createCityScene(
 
   // ---------- frame loop ----------
   const stats = createEmitter<CityStats>();
+  const playerEvents = createEmitter<PlayerStatus>();
+  const SIM_STEP = 1 / 60;
+  let simClock = 0;
+  let playerAt = 0;
+  const cutPlayer = new Vector3();
+  function flashlightOn(): boolean {
+    return flashlightPref === 'on' || (flashlightPref === 'auto' && darkness > 0.35);
+  }
   let frames = 0;
   let statsAt = performance.now();
   let last = performance.now();
@@ -553,26 +667,61 @@ export async function createCityScene(
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
 
-    // keyboard
-    const speed = goal.distance * 0.9 * (keys.has('shift') ? 2.6 : 1);
-    const fwd =
-      (Number(keys.has('w') || keys.has('arrowup')) -
-        Number(keys.has('s') || keys.has('arrowdown'))) *
-      speed *
-      dt;
-    const rgt =
-      (Number(keys.has('d') || keys.has('arrowright')) -
-        Number(keys.has('a') || keys.has('arrowleft'))) *
-      speed *
-      dt;
-    if (fwd || rgt) {
-      goal = keepInside(pan(goal, fwd, rgt), half);
+    // keyboard: W A S D (or the arrows) walk the survivor when following, and pan the camera when free
+    const forward =
+      Number(keys.has('w') || keys.has('arrowup')) - Number(keys.has('s') || keys.has('arrowdown'));
+    const sideways =
+      Number(keys.has('d') || keys.has('arrowright')) -
+      Number(keys.has('a') || keys.has('arrowleft'));
+    if (cameraMode === 'free' && (forward || sideways)) {
+      const speed = goal.distance * 0.9 * (keys.has('shift') ? 2.6 : 1);
+      goal = keepInside(pan(goal, forward * speed * dt, sideways * speed * dt), half);
       easeRate = Math.max(easeRate, 9);
       introUntil = 0;
     }
     const turn = Number(keys.has('e')) - Number(keys.has('q'));
     const tilt = Number(keys.has('r')) - Number(keys.has('f'));
     if (turn || tilt) goal = rotate(goal, turn * 1.5 * dt, tilt * 0.9 * dt);
+
+    // the survivor runs on a fixed 60 Hz clock, so movement is identical at any frame rate. "Forward"
+    // is up the screen: the direction the camera looks, flattened onto the ground.
+    const axes = groundAxes(current.yaw);
+    const walking = cameraMode === 'follow';
+    const input = {
+      moveX: walking ? forward * axes.forward[0] + sideways * axes.right[0] : 0,
+      moveY: walking ? -(forward * axes.forward[1] + sideways * axes.right[1]) : 0,
+      sprint: keys.has('shift'),
+    };
+    simClock += dt;
+    let steps = 0;
+    while (simClock >= SIM_STEP && steps < 6) {
+      previous = player;
+      player = stepPlayer(player, input, colliders, SIM_STEP);
+      simClock -= SIM_STEP;
+      steps++;
+    }
+    if (steps === 6) simClock = 0; // far behind (a stalled tab): do not try to catch up
+    const alpha = simClock / SIM_STEP;
+    const px = lerp(previous.x, player.x, alpha);
+    const py = lerp(previous.y, player.y, alpha);
+    survivor.place(
+      px,
+      py,
+      player.heading,
+      lerp(previous.travelled, player.travelled, alpha),
+      speedOf(player),
+      player.sprinting,
+    );
+
+    if (cameraMode === 'follow') {
+      // the camera leads a little in the direction of travel
+      goal = {
+        ...goal,
+        x: px + clamp(player.vx * 0.3, -2.5, 2.5),
+        z: -(py + clamp(player.vy * 0.3, -2.5, 2.5)),
+        distance: Math.min(goal.distance, FOLLOW_MAX_DISTANCE),
+      };
+    }
 
     if (now > introUntil && easeRate < 7) easeRate = Math.min(7, easeRate + dt * 6);
     else if (now > introUntil && easeRate > 7) easeRate = Math.max(7, easeRate - dt * 20);
@@ -582,6 +731,39 @@ export async function createCityScene(
     const [cx, cy, cz] = cameraPosition(current);
     camera.position.set(cx, cy, cz);
     camera.lookAt(current.x, 0, current.z);
+
+    // see-through hole for whatever stands between the camera and the survivor
+    cutPlayer.set(px, 1.1, -py);
+    cutaway.update(cutPlayer, camera.position, walking ? 2.4 + current.distance * 0.06 : 0);
+    survivor.setRingScale(clamp(current.distance / 36, 1, 5));
+
+    // flashlight: on by itself when it gets dark, and L overrides
+    const lit = flashlightOn();
+    flashlight.intensity = lit ? 700 * (0.35 + 0.65 * darkness) : 0;
+    flashlight.position.set(
+      px + Math.cos(player.heading) * 0.3,
+      1.5,
+      -(py + Math.sin(player.heading) * 0.3),
+    );
+    flashlight.target.position.set(
+      px + Math.cos(player.heading) * 16,
+      0,
+      -(py + Math.sin(player.heading) * 16),
+    );
+
+    if (now - playerAt >= 100) {
+      playerAt = now;
+      playerEvents.emit({
+        x: player.x,
+        y: player.y,
+        speed: speedOf(player),
+        stamina: player.stamina,
+        exhausted: player.exhausted,
+        sprinting: player.sprinting,
+        flashlight: lit,
+        camera: cameraMode,
+      });
+    }
 
     // shadows follow the view: a box around the target, sized by how far out the camera is
     const radius = clamp(current.distance * 1.25, 150, 720);
@@ -644,14 +826,21 @@ export async function createCityScene(
     getHour: () => hour,
     sunElevation: () => elevation,
     focus(x, y, distance) {
+      setCameraMode('free');
       goal = { ...goal, x, z: -y, distance: distance ?? goal.distance };
       introUntil = 0;
     },
     resetView() {
-      goal = { ...home };
+      goal = cameraMode === 'follow' ? recentred() : { ...home };
       introUntil = 0;
     },
+    cameraMode: () => cameraMode,
+    setCameraMode,
+    toggleFlashlight() {
+      flashlightPref = flashlightOn() ? 'off' : 'on';
+    },
     onStats: stats.on,
+    onPlayer: playerEvents.on,
     destroy() {
       destroyed = true;
       cancelAnimationFrame(frameId);
@@ -666,6 +855,8 @@ export async function createCityScene(
       canvas.removeEventListener('wheel', onWheel);
       canvas.removeEventListener('contextmenu', onContextMenu);
       stats.clear();
+      playerEvents.clear();
+      survivor.dispose();
       sun.shadow.map?.dispose();
       for (const d of disposables) d.dispose();
       renderer.dispose();
@@ -772,6 +963,7 @@ const AUTUMN = [srgb(0xc9a23a), srgb(0xb8742e), srgb(0xa8b347)];
 function buildTreeMeshes(
   set: TreeSet,
   own: <T extends { dispose(): void }>(thing: T) => T,
+  cutaway: Cutaway,
 ): Object3D {
   const group = new Object3D();
   if (set.count === 0) return group;
@@ -783,6 +975,8 @@ function buildTreeMeshes(
     new MeshStandardMaterial({ color: new Color().setRGB(...TRUNK), roughness: 1 }),
   );
   const crownMaterial = own(new MeshStandardMaterial({ roughness: 0.95, flatShading: true }));
+  cutaway.apply(trunkMaterial);
+  cutaway.apply(crownMaterial);
   const trunks = new InstancedMesh(trunkGeometry, trunkMaterial, set.count);
   const crowns = new InstancedMesh(crownGeometry, crownMaterial, set.count);
   const dummy = new Object3D();

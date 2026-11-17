@@ -15,7 +15,7 @@ export interface Rig {
 
 export const MIN_PITCH = (18 * Math.PI) / 180;
 export const MAX_PITCH = (82 * Math.PI) / 180;
-export const MIN_DISTANCE = 24;
+export const MIN_DISTANCE = 12;
 export const MAX_DISTANCE = 1100;
 
 export const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));

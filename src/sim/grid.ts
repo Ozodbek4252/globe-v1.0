@@ -8,6 +8,8 @@ export const OCC_BUILDING = 1;
 export const OCC_ROAD = 2;
 export const OCC_WATER = 4;
 export const OCC_TREE = 8;
+/** A bridge: walkable even though water lies under it. */
+export const OCC_BRIDGE = 16;
 
 export interface Grid {
   /** Cell side in metres. */
