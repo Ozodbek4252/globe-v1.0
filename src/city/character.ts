@@ -38,6 +38,8 @@ export interface Survivor {
   ): void;
   /** Scale the ground ring so it stays easy to spot when the camera is far away. */
   setRingScale(scale: number): void;
+  /** 0 standing, 1 lying on the ground. Take effect on the next place(). */
+  setDown(amount: number): void;
   dispose(): void;
 }
 
@@ -148,6 +150,7 @@ export function createSurvivor(): Survivor {
   // `parent` is moved to the survivor; only `root` turns with the heading, so the ring never spins
   const parent = new Object3D();
   parent.add(root, ringGroup);
+  let down = 0;
 
   return {
     object: parent,
@@ -157,17 +160,20 @@ export function createSurvivor(): Survivor {
       root.rotation.y = heading + Math.PI / 2;
       const pace = Math.min(1, speed / 3.2); // 0 standing, 1 walking, above that running
       const phase = (travelled / STRIDE) * Math.PI * 2;
-      const swing = 0.75 * Math.min(1.35, pace) * (sprinting ? 1.25 : 1);
+      const swing = 0.75 * Math.min(1.35, pace) * (sprinting ? 1.25 : 1) * (1 - down);
       legL.rotation.x = Math.sin(phase) * swing;
       legR.rotation.x = -Math.sin(phase) * swing;
       armL.rotation.x = -Math.sin(phase) * swing * 0.9;
       armR.rotation.x = Math.sin(phase) * swing * 0.9;
-      // two bobs per stride, and a forward lean that grows with speed
-      body.position.y = Math.abs(Math.sin(phase)) * 0.045 * pace;
-      body.rotation.x = (sprinting ? 0.28 : 0.1) * pace;
+      // two bobs per stride, and a forward lean that grows with speed; a fallen survivor lies on their back
+      body.position.y = Math.abs(Math.sin(phase)) * 0.045 * pace * (1 - down) + 0.2 * down;
+      body.rotation.x = (sprinting ? 0.28 : 0.1) * pace * (1 - down) - down * (Math.PI / 2 - 0.05);
     },
     setRingScale(scale) {
       ringGroup.scale.setScalar(scale);
+    },
+    setDown(amount) {
+      down = Math.min(1, Math.max(0, amount));
     },
     dispose() {
       for (const d of disposables) d.dispose();

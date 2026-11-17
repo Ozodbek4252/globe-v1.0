@@ -5,10 +5,11 @@ select them. Nine map modes (physical, natural, political, continents, populatio
 person, income group, live day and night), a NASA night-lights layer, search, and a country card.
 
 It is a Vite + TypeScript + Vue 3 app. The globe is drawn with Canvas 2D (d3-geo) plus a WebGL2
-fragment shader for the night lights. It is the base for an outbreak survival game. The first piece
-of it is in: press **Enter Tashkent** to drop from the globe into a 3D city built from real
-OpenStreetMap buildings (see [The 3D city](#the-3d-city)). The game itself is not built yet; the
-simulation will live in [src/sim](src/sim/README.md).
+fragment shader for the night lights. It is the base for an outbreak survival game, and the first
+playable piece is in: press **Enter Tashkent** to drop from the globe into a 3D city built from real
+OpenStreetMap buildings, with a horde of zombies in it. You steer one survivor with a pistol and have
+to stay alive until the rescue helicopter lands (see [The 3D city](#the-3d-city) and
+[The game](#the-game)). The rules live in [src/sim](src/sim/README.md).
 
 ## Run it
 
@@ -87,11 +88,14 @@ src/
     textures.ts               facades with lit windows, road markings, ground grain
     cameraRig.ts  followYaw.ts  the camera maths, and which side the follow camera starts on
     character.ts  cutaway.ts  the survivor's low-poly body and walk cycle; see-through occluders
+    zombies.ts  effects.ts    the horde as one instanced mesh; tracers, flashes, blood, noise rings
+    pickups.ts  helicopter.ts supply crates; the rescue helicopter
+    bearings.ts               compass words and screen directions (pure, tested)
     createCity.ts  load.ts    builds the scene and runs it; loads public/cities/<id>.json
-  lib/                        sun position, formatters, sphere helpers, storage, url, hash
-  ui/                         Vue components (dropdown, legend, search, picks, card, CityView, ...)
-  sim/                        pure, seeded game logic: grid.ts, colliders.ts (walls, trunks, water),
-                              player.ts (movement, stamina). The rest is still a placeholder
+  lib/                        sun position, formatters, sphere helpers, storage, url, hash, rng
+  ui/                         Vue components (dropdown, legend, search, picks, card, CityView, GameHud...)
+  sim/                        pure, seeded game rules: colliders, raycast, flow field, player,
+                              horde, game. See src/sim/README.md
   styles/                     tokens.css, base.css
 tests/                        Vitest
 scripts/                      check.ps1, editor-deps.ps1, fetch-city.mjs (OpenStreetMap extractor)
@@ -113,15 +117,43 @@ so the globe page stays light.
   Walls, trees, lamp posts and water are solid; you slide along them, and bridges let you cross canals.
   Buildings and trees that stand between the camera and the survivor dissolve so you never lose them.
   At night a flashlight comes on by itself (`L` to override).
-- **Camera:** it follows the survivor from the side with the clearest view. `Q E` or drag turn it, `R F`
-  tilt, wheel zooms, `H` recentres. `V` switches to a free camera (`W A S D` or drag pan it, `T` jumps
-  to the TV tower), and `V` again returns to the survivor.
+- **Camera:** it follows the survivor from the side with the clearest view. `Q E` or right-drag turn
+  it, the wheel zooms, `H` recentres. `V` switches to a free camera (`W A S D` or drag pan it, `R F`
+  tilt, `T` jumps to the TV tower), and `V` again returns to the survivor.
 - **Other keys:** `P` shows a performance panel, `Esc` goes back to the globe.
 - **Time of day:** a slider sets the real sun position over Tashkent (a fixed autumn date). Windows and
   street lamps light up as it gets dark.
 - **Deep links:** `/?hour=17.4&view=x,y,yaw,pitch,distance&player=x,y&camera=free#city` opens at a
   given time, camera placement and survivor position (metres east and north of the centre, degrees,
-  metres). All parts are optional; `view` alone starts in the free camera.
+  metres). All parts are optional; `view` alone starts in the free camera. Game options are in
+  [The game](#the-game).
+
+## The game
+
+Survive until the helicopter lands. The clock is five minutes.
+
+- **Aim and fire:** the mouse aims (the survivor turns to face it), holding the left button fires the
+  pistol. 15 rounds a magazine, 45 in reserve; `R` reloads (it also reloads by itself when empty).
+  Bullets stop at walls. A zombie takes two hits, a runner one.
+- **Shove:** `Space` knocks back and stuns whatever is in front of you (every 1.6 seconds).
+- **Noise matters.** Zombies see in front of them and smell very close, but they also _hear_: a gunshot
+  carries about 60 m, sprinting about 16 m, walking about 5 m, standing still none. Rings on the
+  ground show how far each sound went. Zombies that lose you give up after a few seconds.
+- **Speed matters.** Walkers are slower than you walking. Runners are faster than a walk but slower
+  than a sprint. Sprinting is loud and tires you out; zombies hanging on slow you down.
+- **Supplies:** ammunition crates and first-aid kits lie about, each marked by a faint column of light.
+  Health comes back a little by itself, but only up to 60 and only after a quiet spell.
+- **Waves:** a band appears out of sight every 40 seconds, bigger each time, already on your trail; the
+  banner says which way it comes from. In the last 14 seconds the helicopter is heard and every zombie
+  in earshot comes for you.
+- **Zombies as dots:** from the free camera or when zoomed out, each zombie also shows as a red dot
+  (brighter when hunting), so the horde reads from far away.
+
+Game options go on the link, all optional: `&seed=123` replays the same game (same zombies, supplies and
+waves), `&rescue=60` sets the clock in seconds, `&zombies=0` removes the zombies in the streets at the
+start (the number is groups; default 70), `&waves=0` switches the waves off. `&debug=1` puts the
+scene on `window.__city.debug` with levers for staging scenes (spawn zombies, jump the clock).
+
 - **Heights:** OpenStreetMap tags a height for only about 5% of Tashkent's buildings, so the rest are
   estimated from the kind of building and its footprint. The estimate is deterministic.
 

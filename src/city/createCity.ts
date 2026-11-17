@@ -31,10 +31,29 @@ import {
 } from 'three';
 import { createEmitter, type Unsubscribe } from '../lib/emitter';
 import { buildColliders, findSpawn } from '../sim/colliders';
-import { createPlayer, speedOf, stepPlayer, type PlayerState } from '../sim/player';
+import {
+  createGame,
+  createGameWorld,
+  drainEvents,
+  GAME,
+  rescueIn,
+  stepGame,
+  validSpot,
+  type GameEvent,
+  type GameInput,
+  type GameState,
+  type GameStatus,
+} from '../sim/game';
+import { sendHunting, spawnZombie, ZKind, ZState } from '../sim/horde';
+import { speedOf, type PlayerState } from '../sim/player';
+import { compassName, screenAngle } from './bearings';
 import { createSurvivor } from './character';
 import { createCutaway, type Cutaway } from './cutaway';
+import { createEffects, type AimMode } from './effects';
 import { openestYaw } from './followYaw';
+import { createHelicopter } from './helicopter';
+import { createPickupMarkers, type PickupMarkers } from './pickups';
+import { createZombieRenderer } from './zombies';
 import {
   MAX_DISTANCE,
   MAX_PITCH,
@@ -85,6 +104,9 @@ export interface CityStats {
   triangles: number;
   buildings: number;
   trees: number;
+  /** Zombies standing right now, and how many bodies were drawn this frame. */
+  zombies: number;
+  zombiesDrawn: number;
 }
 
 /** A camera placement. x and y are city metres (east, north); angles are degrees. */
@@ -111,6 +133,93 @@ export interface PlayerStatus {
   sprinting: boolean;
   flashlight: boolean;
   camera: CameraMode;
+  /** The state of the game: playing, rescued, or dead. */
+  phase: GameStatus;
+  /** 0 to 100. */
+  health: number;
+  /** Rounds in the magazine, its size, and rounds in reserve. */
+  ammo: number;
+  magazine: number;
+  reserve: number;
+  /** 0 when not reloading, otherwise how far through the reload it is (0 to 1). */
+  reloading: number;
+  /** 1 when the shove is ready, rising from 0 as it recharges. */
+  shove: number;
+  /** Seconds survived, seconds until the helicopter lands, and the length of the whole game. */
+  time: number;
+  rescueIn: number;
+  rescueTotal: number;
+  /** The helicopter has been heard: the horde is coming for the survivor. */
+  inbound: boolean;
+  kills: number;
+  /** The number of the latest wave (0 before the first). */
+  wave: number;
+  /** Zombies standing anywhere, and zombies within 40 m. */
+  zombies: number;
+  near: number;
+}
+
+/** Things that happen in the game that the HUD wants to flash up. Angles are clockwise from screen-up. */
+export type GameNotice =
+  | { type: 'wave'; number: number; size: number; compass: string; angle: number }
+  | { type: 'hurt'; amount: number; angle: number }
+  | { type: 'pickup'; kind: 'ammo' | 'medkit' }
+  | { type: 'rescue'; seconds: number }
+  /** A new game has begun: forget everything announced. */
+  | { type: 'restart' }
+  | {
+      type: 'over';
+      won: boolean;
+      time: number;
+      kills: number;
+      shots: number;
+      hits: number;
+      damageTaken: number;
+      waves: number;
+    };
+
+/** Levers for staging scenes (screenshots, tests). Only present when the scene is made with `debug: true`. */
+export interface CityDebug {
+  /** Put up to `count` zombies around the survivor, `distance` metres out. Returns how many were placed. */
+  spawn(count: number, distance: number, hunting: boolean): number;
+  /** Aim at the nearest zombie by itself instead of at the mouse. */
+  autoAim(on: boolean): void;
+  /** Take health off the survivor. */
+  hurt(amount: number): void;
+  /** Jump the game clock forward. */
+  skip(seconds: number): void;
+  /** Set the game clock to an exact time. */
+  setTime(seconds: number): void;
+  /** Stop the game stepping (the picture keeps drawing), so a scene can be held still. */
+  freeze(on: boolean): void;
+  /** The numbers worth checking. */
+  snapshot(): {
+    status: GameStatus;
+    health: number;
+    ammo: number;
+    reserve: number;
+    reloading: number;
+    alive: number;
+    kills: number;
+    shots: number;
+    time: number;
+    wave: number;
+    x: number;
+    y: number;
+    /** Which way the survivor faces, in radians counter-clockwise from east. */
+    heading: number;
+  };
+}
+
+/** Setting up a game: all optional (a random game by default). Handy for sharing and for tests. */
+export interface GameSetup {
+  seed?: number;
+  /** Seconds until the helicopter lands. */
+  rescueAt?: number;
+  /** Groups of zombies in the streets at the start (0 for none). */
+  zombies?: number;
+  /** False to switch the waves off. */
+  waves?: boolean;
 }
 
 export interface CityOptions {
@@ -124,6 +233,9 @@ export interface CityOptions {
   player?: { x: number; y: number };
   /** Skip the fly-in and the camera easing. Defaults to the user's reduced-motion setting. */
   reducedMotion?: boolean;
+  game?: GameSetup;
+  /** Add the `debug` levers to the scene. */
+  debug?: boolean;
   onProgress?: (fraction: number, label: string) => void;
 }
 
@@ -144,6 +256,11 @@ export interface CityScene {
   onStats(listener: (stats: CityStats) => void): Unsubscribe;
   /** Fires about ten times a second with the survivor's condition. */
   onPlayer(listener: (status: PlayerStatus) => void): Unsubscribe;
+  /** Fires when something happens that the HUD should announce. */
+  onGame(listener: (notice: GameNotice) => void): Unsubscribe;
+  /** Start again from the beginning with a new random game. */
+  restart(): void;
+  debug?: CityDebug;
   destroy(): void;
 }
 
@@ -418,11 +535,44 @@ export async function createCityScene(
       ? [landmark.x, landmark.y]
       : [0, 0];
   const [spawnX, spawnY] = findSpawn(colliders, startNear, 200, options.player ? 1.5 : 5);
-  let player: PlayerState = createPlayer(spawnX, spawnY, Math.PI / 2);
+
+  // ---------- the game: the horde, the pistol, supplies, the rescue clock ----------
+  progress(0.82, 'Gathering the horde');
+  const gameWorld = createGameWorld(colliders, [spawnX, spawnY]);
+  const setup = options.game ?? {};
+  let seed = setup.seed ?? Math.floor(Math.random() * 0xffffffff);
+  const newGame = (): GameState =>
+    createGame(gameWorld, {
+      seed,
+      startX: spawnX,
+      startY: spawnY,
+      rescueAt: setup.rescueAt,
+      clumps: setup.zombies,
+      waves: setup.waves,
+    });
+  let game = newGame();
+  let player: PlayerState = game.player;
   let previous: PlayerState = player;
   const survivor = createSurvivor();
   scene.add(survivor.object);
   survivor.place(player.x, player.y, player.heading, 0, 0, false);
+
+  const zombies = createZombieRenderer(game.horde.capacity);
+  own(zombies);
+  scene.add(zombies.object);
+  const effects = createEffects();
+  own(effects);
+  effects.setReducedMotion(reducedMotion);
+  scene.add(effects.object);
+  let pickupMarkers: PickupMarkers = createPickupMarkers(game.pickups);
+  scene.add(pickupMarkers.object);
+  const helicopter = createHelicopter();
+  own(helicopter);
+  scene.add(helicopter.object);
+  let helicopterAngle = 0;
+  let helicopterLanding: [number, number] = [spawnX, spawnY];
+  let downAmount = 0;
+  let gamePhase: GameStatus = 'playing';
   // a flashlight for the dark
   const flashlight = new SpotLight(0xfff1d6, 0, 70, 0.52, 0.65, 1.4);
   flashlight.castShadow = false;
@@ -566,11 +716,23 @@ export async function createCityScene(
 
   // ---------- input ----------
   const keys = new Set<string>();
+  // one-shot requests, kept until the first simulation step of a frame takes them
+  let reloadQueued = false;
+  let shoveQueued = false;
+  let triggerHeld = false;
+  let aimScreen: { x: number; y: number } | null = null;
   const onKeyDown = (e: KeyboardEvent): void => {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     const k = e.key.toLowerCase();
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    if (k === 'v') setCameraMode(cameraMode === 'follow' ? 'free' : 'follow');
+    // Enter plays again; on a focused button it already means "press this", so leave it alone there
+    if (k === 'enter' && game.status !== 'playing' && !(e.target instanceof HTMLButtonElement))
+      restart();
+    else if (k === 'r' && cameraMode === 'follow') {
+      if (!e.repeat) reloadQueued = true;
+    } else if (k === ' ' && cameraMode === 'follow') {
+      if (!e.repeat) shoveQueued = true;
+    } else if (k === 'v') setCameraMode(cameraMode === 'follow' ? 'free' : 'follow');
     else if (k === 'l') flashlightPref = flashlightOn() ? 'off' : 'on';
     else if (k === 't' && tower) {
       setCameraMode('free');
@@ -585,7 +747,10 @@ export async function createCityScene(
   const onKeyUp = (e: KeyboardEvent): void => {
     keys.delete(e.key.toLowerCase());
   };
-  const onBlur = (): void => keys.clear();
+  const onBlur = (): void => {
+    keys.clear();
+    triggerHeld = false;
+  };
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
   window.addEventListener('blur', onBlur);
@@ -601,18 +766,29 @@ export async function createCityScene(
     }
     easeRate = Math.max(easeRate, 14);
   };
+  const trackAim = (e: PointerEvent): void => {
+    if (e.pointerType !== 'mouse') return;
+    const box = canvas.getBoundingClientRect();
+    aimScreen = { x: e.clientX - box.left, y: e.clientY - box.top };
+  };
   const onPointerDown = (e: PointerEvent): void => {
     canvas.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     introUntil = 0;
+    trackAim(e);
+    // with a mouse, the left button is the trigger while walking the survivor
+    if (e.pointerType === 'mouse' && e.button === 0 && cameraMode === 'follow') triggerHeld = true;
   };
   const onPointerMove = (e: PointerEvent): void => {
+    trackAim(e);
     const last = pointers.get(e.pointerId);
     if (!last) return;
     const dx = e.clientX - last.x;
     const dy = e.clientY - last.y;
     if (pointers.size === 1) {
-      dragBy(dx, dy, (e.buttons & 2) !== 0 || ((e.buttons & 1) !== 0 && e.altKey));
+      const orbit = (e.buttons & 6) !== 0 || ((e.buttons & 1) !== 0 && e.altKey);
+      // a mouse in follow mode is aiming: only the right or middle button drags the camera round
+      if (!(e.pointerType === 'mouse' && cameraMode === 'follow' && !orbit)) dragBy(dx, dy, orbit);
     } else if (pointers.size === 2) {
       // pinch to zoom, twist to rotate, and the midpoint drags the map
       const [a, b] = [...pointers.entries()];
@@ -629,6 +805,12 @@ export async function createCityScene(
   };
   const onPointerEnd = (e: PointerEvent): void => {
     pointers.delete(e.pointerId);
+    if (e.pointerType === 'mouse' && (e.button === 0 || e.type === 'pointercancel')) {
+      triggerHeld = false;
+    }
+  };
+  const onPointerLeave = (e: PointerEvent): void => {
+    if (e.pointerType === 'mouse' && !pointers.has(e.pointerId)) aimScreen = null;
   };
   const onWheel = (e: WheelEvent): void => {
     e.preventDefault();
@@ -641,16 +823,136 @@ export async function createCityScene(
   canvas.addEventListener('pointermove', onPointerMove);
   canvas.addEventListener('pointerup', onPointerEnd);
   canvas.addEventListener('pointercancel', onPointerEnd);
+  canvas.addEventListener('pointerleave', onPointerLeave);
   canvas.addEventListener('wheel', onWheel, { passive: false });
   canvas.addEventListener('contextmenu', onContextMenu);
 
   // ---------- frame loop ----------
   const stats = createEmitter<CityStats>();
   const playerEvents = createEmitter<PlayerStatus>();
+  const notices = createEmitter<GameNotice>();
   const SIM_STEP = 1 / 60;
   let simClock = 0;
   let playerAt = 0;
   const cutPlayer = new Vector3();
+
+  /** Turn what the game reports into pictures and HUD announcements. */
+  function handleEvent(e: GameEvent): void {
+    switch (e.type) {
+      case 'shot':
+        effects.shot(e.x, e.y, e.endX, e.endY, e.hit);
+        break;
+      case 'hit':
+        effects.hit(e.x, e.y, e.kill);
+        break;
+      case 'noise':
+        effects.noise(e.x, e.y, e.radius);
+        break;
+      case 'hurt':
+        notices.emit({
+          type: 'hurt',
+          amount: e.amount,
+          angle: screenAngle(current.yaw, e.fromX - player.x, e.fromY - player.y),
+        });
+        break;
+      case 'pickup':
+        notices.emit({ type: 'pickup', kind: e.kind });
+        break;
+      case 'wave':
+        notices.emit({
+          type: 'wave',
+          number: e.number,
+          size: e.size,
+          compass: compassName(e.angle),
+          angle: screenAngle(current.yaw, Math.cos(e.angle), Math.sin(e.angle)),
+        });
+        break;
+      case 'rescue': {
+        helicopterAngle = e.angle;
+        // it lands on open ground a little ahead of the survivor (up the screen), where the camera sees it
+        const axes = groundAxes(current.yaw);
+        helicopterLanding = findSpawn(
+          colliders,
+          [player.x + axes.forward[0] * 11, player.y - axes.forward[1] * 11],
+          35,
+          7,
+        );
+        notices.emit({ type: 'rescue', seconds: e.seconds });
+        break;
+      }
+      case 'won':
+      case 'lost':
+        notices.emit({
+          type: 'over',
+          won: e.type === 'won',
+          time: game.time,
+          kills: game.stats.kills,
+          shots: game.stats.shots,
+          hits: game.stats.hits,
+          damageTaken: Math.round(game.stats.damageTaken),
+          waves: game.wave,
+        });
+        break;
+      default:
+        break; // reload, reloaded, empty, shove: no picture yet
+    }
+  }
+
+  // The point on the ground-plane that the mouse is over, at about chest height so that aiming at a
+  // zombie's body (not its feet) works from a steep camera. Null with no mouse or the free camera.
+  const AIM_HEIGHT = 1;
+  const aimRay = new Vector3();
+  const aimDirection = new Vector3();
+  function aimPoint(): [number, number] | null {
+    if (!aimScreen || cameraMode !== 'follow') return null;
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    if (w < 1 || h < 1) return null;
+    camera.updateMatrixWorld();
+    aimRay.set((aimScreen.x / w) * 2 - 1, -(aimScreen.y / h) * 2 + 1, 0.5).unproject(camera);
+    aimDirection.copy(aimRay).sub(camera.position).normalize();
+    if (aimDirection.y > -0.02) return null; // looking at the sky
+    const t = (AIM_HEIGHT - camera.position.y) / aimDirection.y;
+    return [camera.position.x + aimDirection.x * t, -(camera.position.z + aimDirection.z * t)];
+  }
+
+  let debugAutoAim = false;
+  let debugFrozen = false;
+  function nearestZombie(): [number, number] | null {
+    const h = game.horde;
+    let best = -1;
+    let bestD = 40 * 40;
+    for (let i = 0; i < h.used; i++) {
+      if (h.state[i] >= ZState.DEAD) continue;
+      const d = (h.x[i] - player.x) ** 2 + (h.y[i] - player.y) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return best < 0 ? null : [h.x[best], h.y[best]];
+  }
+
+  /** Begin a new game from the start: a fresh horde, supplies and clock, and the survivor back at the spawn. */
+  function restart(): void {
+    seed = Math.floor(Math.random() * 0xffffffff);
+    game = newGame();
+    player = previous = game.player;
+    gamePhase = 'playing';
+    downAmount = 0;
+    survivor.setDown(0);
+    helicopter.hide();
+    effects.clear();
+    scene.remove(pickupMarkers.object);
+    pickupMarkers.dispose();
+    pickupMarkers = createPickupMarkers(game.pickups);
+    scene.add(pickupMarkers.object);
+    reloadQueued = shoveQueued = false;
+    simClock = 0;
+    goal = cameraMode === 'follow' ? recentred() : { ...home };
+    easeRate = Math.max(easeRate, 10);
+    notices.emit({ type: 'restart' });
+  }
   function flashlightOn(): boolean {
     return flashlightPref === 'on' || (flashlightPref === 'auto' && darkness > 0.35);
   }
@@ -680,30 +982,46 @@ export async function createCityScene(
       introUntil = 0;
     }
     const turn = Number(keys.has('e')) - Number(keys.has('q'));
-    const tilt = Number(keys.has('r')) - Number(keys.has('f'));
+    // R reloads when walking the survivor, so it only tilts the camera in the free view
+    const tilt = cameraMode === 'free' ? Number(keys.has('r')) - Number(keys.has('f')) : 0;
     if (turn || tilt) goal = rotate(goal, turn * 1.5 * dt, tilt * 0.9 * dt);
 
-    // the survivor runs on a fixed 60 Hz clock, so movement is identical at any frame rate. "Forward"
+    // The game runs on a fixed 60 Hz clock, so it plays out identically at any frame rate. "Forward"
     // is up the screen: the direction the camera looks, flattened onto the ground.
     const axes = groundAxes(current.yaw);
     const walking = cameraMode === 'follow';
-    const input = {
+    const aim = debugAutoAim ? nearestZombie() : aimPoint();
+    const input: GameInput = {
       moveX: walking ? forward * axes.forward[0] + sideways * axes.right[0] : 0,
       moveY: walking ? -(forward * axes.forward[1] + sideways * axes.right[1]) : 0,
       sprint: keys.has('shift'),
+      aim,
+      fire: walking && triggerHeld,
+      reload: reloadQueued,
+      shove: shoveQueued,
     };
-    simClock += dt;
+    simClock = debugFrozen ? 0 : simClock + dt;
     let steps = 0;
     while (simClock >= SIM_STEP && steps < 6) {
       previous = player;
-      player = stepPlayer(player, input, colliders, SIM_STEP);
+      stepGame(game, input, gameWorld, SIM_STEP);
+      player = game.player;
+      // a reload or shove request counts once, on the first step that sees it
+      input.reload = false;
+      input.shove = false;
+      if (steps === 0) reloadQueued = shoveQueued = false;
+      for (const e of drainEvents(game)) handleEvent(e);
       simClock -= SIM_STEP;
       steps++;
     }
     if (steps === 6) simClock = 0; // far behind (a stalled tab): do not try to catch up
+    gamePhase = game.status;
     const alpha = simClock / SIM_STEP;
     const px = lerp(previous.x, player.x, alpha);
     const py = lerp(previous.y, player.y, alpha);
+    // a dead survivor falls over
+    downAmount = gamePhase === 'lost' ? Math.min(1, downAmount + dt / 0.6) : 0;
+    survivor.setDown(downAmount);
     survivor.place(
       px,
       py,
@@ -739,7 +1057,7 @@ export async function createCityScene(
 
     // flashlight: on by itself when it gets dark, and L overrides
     const lit = flashlightOn();
-    flashlight.intensity = lit ? 700 * (0.35 + 0.65 * darkness) : 0;
+    flashlight.intensity = lit ? 420 * (0.35 + 0.65 * darkness) : 0;
     flashlight.position.set(
       px + Math.cos(player.heading) * 0.3,
       1.5,
@@ -751,8 +1069,42 @@ export async function createCityScene(
       -(py + Math.sin(player.heading) * 16),
     );
 
+    // the horde, the supplies, the shots and the rescue
+    zombies.update(game.horde, dt, current.x, -current.z, current.distance);
+    pickupMarkers.sync(game.pickups, now / 1000, darkness);
+    const aimMode: AimMode =
+      game.reloading > 0 ? 'reloading' : game.ammo === 0 && game.reserve === 0 ? 'empty' : 'ready';
+    effects.setAim(
+      aim && gamePhase === 'playing' ? aim[0] : null,
+      aim ? aim[1] : 0,
+      clamp(current.distance / 36, 1, 5),
+      aimMode,
+    );
+    effects.update(dt);
+    if (game.inbound && gamePhase !== 'lost') {
+      const along = 1 - rescueIn(game) / GAME.inbound;
+      helicopter.update(
+        clamp(along, 0, 1),
+        helicopterAngle,
+        helicopterLanding[0],
+        helicopterLanding[1],
+        px,
+        py,
+        darkness,
+        dt,
+      );
+    } else helicopter.hide();
+
     if (now - playerAt >= 100) {
       playerAt = now;
+      let near = 0;
+      const h = game.horde;
+      for (let i = 0; i < h.used; i++) {
+        if (h.state[i] >= ZState.DEAD) continue; // dead or free
+        const dx = h.x[i] - player.x;
+        const dy = h.y[i] - player.y;
+        if (dx * dx + dy * dy < 1600) near++;
+      }
       playerEvents.emit({
         x: player.x,
         y: player.y,
@@ -762,6 +1114,21 @@ export async function createCityScene(
         sprinting: player.sprinting,
         flashlight: lit,
         camera: cameraMode,
+        phase: game.status,
+        health: game.health,
+        ammo: game.ammo,
+        magazine: GAME.weapon.mag,
+        reserve: game.reserve,
+        reloading: game.reloading > 0 ? 1 - game.reloading / GAME.weapon.reload : 0,
+        shove: 1 - game.shoveCooldown / GAME.shove.cooldown,
+        time: game.time,
+        rescueIn: rescueIn(game),
+        rescueTotal: game.rescueAt,
+        inbound: game.inbound,
+        kills: game.stats.kills,
+        wave: game.wave,
+        zombies: game.horde.alive,
+        near,
       });
     }
 
@@ -802,6 +1169,8 @@ export async function createCityScene(
         triangles: renderer.info.render.triangles,
         buildings: data.buildings.length,
         trees: treeSet.count,
+        zombies: game.horde.alive,
+        zombiesDrawn: zombies.drawn(),
       });
       frames = 0;
       statsAt = now;
@@ -841,6 +1210,63 @@ export async function createCityScene(
     },
     onStats: stats.on,
     onPlayer: playerEvents.on,
+    onGame: notices.on,
+    restart,
+    debug: options.debug
+      ? {
+          spawn(count, distance, hunting) {
+            let placed = 0;
+            for (let k = 0; k < count * 30 && placed < count; k++) {
+              const a = Math.random() * Math.PI * 2;
+              const r = distance * (0.75 + Math.random() * 0.5);
+              const x = player.x + Math.cos(a) * r;
+              const y = player.y + Math.sin(a) * r;
+              if (!validSpot(gameWorld, x, y, 0.6)) continue;
+              const i = spawnZombie(
+                game.horde,
+                x,
+                y,
+                k % 6 === 0 ? ZKind.RUNNER : ZKind.WALKER,
+                hunting ? ZState.CHASE : ZState.WANDER,
+              );
+              if (i < 0) break;
+              if (hunting) sendHunting(game.horde, i, 300);
+              placed++;
+            }
+            return placed;
+          },
+          autoAim(on) {
+            debugAutoAim = on;
+          },
+          hurt(amount) {
+            game.health -= amount;
+          },
+          skip(seconds) {
+            game.time += seconds;
+          },
+          setTime(seconds) {
+            game.time = seconds;
+          },
+          freeze(on) {
+            debugFrozen = on;
+          },
+          snapshot: () => ({
+            status: game.status,
+            health: game.health,
+            ammo: game.ammo,
+            reserve: game.reserve,
+            reloading: game.reloading,
+            alive: game.horde.alive,
+            kills: game.stats.kills,
+            shots: game.stats.shots,
+            time: game.time,
+            wave: game.wave,
+            x: game.player.x,
+            y: game.player.y,
+            heading: game.player.heading,
+          }),
+        }
+      : undefined,
     destroy() {
       destroyed = true;
       cancelAnimationFrame(frameId);
@@ -852,11 +1278,14 @@ export async function createCityScene(
       canvas.removeEventListener('pointermove', onPointerMove);
       canvas.removeEventListener('pointerup', onPointerEnd);
       canvas.removeEventListener('pointercancel', onPointerEnd);
+      canvas.removeEventListener('pointerleave', onPointerLeave);
       canvas.removeEventListener('wheel', onWheel);
       canvas.removeEventListener('contextmenu', onContextMenu);
       stats.clear();
       playerEvents.clear();
+      notices.clear();
       survivor.dispose();
+      pickupMarkers.dispose();
       sun.shadow.map?.dispose();
       for (const d of disposables) d.dispose();
       renderer.dispose();

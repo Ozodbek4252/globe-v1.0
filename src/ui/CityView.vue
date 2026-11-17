@@ -5,14 +5,23 @@ import type {
   CityScene,
   CityStats,
   CityViewpoint,
+  GameNotice,
+  GameSetup,
   PlayerStatus,
 } from '../city/createCity';
+import GameHud from './GameHud.vue';
 
 const props = defineProps<{ cityId: string; title: string }>();
 const emit = defineEmits<{ close: [] }>();
 
 const host = useTemplateRef<HTMLElement>('host');
 const root = useTemplateRef<HTMLElement>('root');
+/** What GameHud exposes (spelled out, so the linter does not have to resolve a .vue type). */
+interface HudHandle {
+  push(notice: GameNotice): void;
+  reset(): void;
+}
+const hud = useTemplateRef<HudHandle>('hud');
 const progress = ref(0);
 const status = ref('Loading map data');
 const error = ref('');
@@ -27,6 +36,7 @@ let scene: CityScene | null = null;
 let disposed = false;
 let stopStats: (() => void) | null = null;
 let stopPlayer: (() => void) | null = null;
+let stopGame: (() => void) | null = null;
 
 /**
  * Optional deep link, handy for sharing a spot or reproducing a screenshot. Metres are east/north of
@@ -35,12 +45,18 @@ let stopPlayer: (() => void) | null = null;
  *   &view=x,y,yaw,pitch,distance      start with the free camera here
  *   &player=x,y                       put the survivor near this point
  *   &camera=free|follow               which camera to start with
+ *   &seed=123                         replay the same game (same zombies, supplies and waves)
+ *   &rescue=60                        seconds until the helicopter lands (default 300)
+ *   &zombies=0                        groups of zombies in the streets at the start (default 70)
+ *   &waves=0                          switch the waves off
  */
 function linkOptions(): {
   hour?: number;
   view?: CityViewpoint;
   camera?: CameraMode;
   player?: { x: number; y: number };
+  game?: GameSetup;
+  debug?: boolean;
 } {
   const q = new URLSearchParams(location.search);
   const out: ReturnType<typeof linkOptions> = {};
@@ -54,6 +70,19 @@ function linkOptions(): {
   if (p.length === 2 && p.every(Number.isFinite)) out.player = { x: p[0], y: p[1] };
   const cam = q.get('camera');
   if (cam === 'free' || cam === 'follow') out.camera = cam;
+  const game: GameSetup = {};
+  const number = (key: string): number | undefined => {
+    const v = q.has(key) ? Number(q.get(key)) : Number.NaN;
+    return Number.isFinite(v) ? v : undefined;
+  };
+  game.seed = number('seed');
+  const rescue = number('rescue');
+  if (rescue !== undefined && rescue > 0) game.rescueAt = rescue;
+  const zombies = number('zombies');
+  if (zombies !== undefined && zombies >= 0) game.zombies = Math.min(300, Math.floor(zombies));
+  if (q.get('waves') === '0') game.waves = false;
+  out.game = game;
+  if (q.get('debug') === '1') out.debug = true;
   return out;
 }
 
@@ -95,6 +124,8 @@ onMounted(async () => {
       view: link.view,
       camera: link.camera,
       player: link.player,
+      game: link.game,
+      debug: link.debug,
       onProgress: (fraction, label) => {
         progress.value = fraction;
         status.value = label;
@@ -105,28 +136,43 @@ onMounted(async () => {
       return;
     }
     scene = created;
+    // with ?debug=1 the scene is reachable from the console as window.__city, for staging scenes
+    if (link.debug) (window as unknown as { __city?: CityScene }).__city = created;
     sunElevation.value = Math.round(created.sunElevation());
     stopStats = created.onStats((s) => (stats.value = s));
     stopPlayer = created.onPlayer((s) => (player.value = s));
+    stopGame = created.onGame((n) => {
+      hud.value?.push(n);
+    });
     ready.value = true;
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'The city could not be loaded.';
   }
 });
 
+function restart(): void {
+  scene?.restart(); // the scene announces it, and the HUD clears itself
+}
+
 onBeforeUnmount(() => {
   disposed = true;
   window.removeEventListener('keydown', onKey);
   stopStats?.();
   stopPlayer?.();
+  stopGame?.();
   scene?.destroy();
   scene = null;
+  delete (window as unknown as { __city?: CityScene }).__city;
 });
 </script>
 
 <template>
   <div ref="root" class="cityview" role="dialog" aria-label="3D city view" tabindex="-1">
-    <div ref="host" class="city-host"></div>
+    <div
+      ref="host"
+      class="city-host"
+      :class="{ aiming: player?.camera === 'follow' && player?.phase === 'playing' }"
+    ></div>
 
     <div v-if="!ready && !error" class="city-loading" role="status">
       <h2>{{ title }}</h2>
@@ -141,6 +187,8 @@ onBeforeUnmount(() => {
     </div>
 
     <template v-if="ready">
+      <GameHud ref="hud" :player="player" @restart="restart" @close="emit('close')" />
+
       <button
         class="city-btn city-back"
         type="button"
@@ -178,6 +226,19 @@ onBeforeUnmount(() => {
         </p>
         <div
           v-if="player.camera === 'follow'"
+          class="health"
+          :class="{ low: player.health < 30 }"
+          role="progressbar"
+          aria-label="Health"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          :aria-valuenow="Math.round(player.health)"
+        >
+          <i :style="{ width: Math.round(player.health) + '%' }"></i>
+          <span>{{ Math.round(player.health) }}</span>
+        </div>
+        <div
+          v-if="player.camera === 'follow'"
           class="stamina"
           :class="{ tired: player.exhausted, running: player.sprinting }"
           role="progressbar"
@@ -196,9 +257,10 @@ onBeforeUnmount(() => {
       <ul class="city-help" aria-label="Controls">
         <template v-if="!player || player.camera === 'follow'">
           <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk &nbsp; <kbd>Shift</kbd> run</li>
-          <li><kbd>Q</kbd><kbd>E</kbd> or drag: turn camera &nbsp; <kbd>Wheel</kbd> zoom</li>
-          <li><kbd>L</kbd> flashlight &nbsp; <kbd>V</kbd> free camera</li>
-          <li><kbd>H</kbd> recentre &nbsp; <kbd>Esc</kbd> globe</li>
+          <li><kbd>Mouse</kbd> aim &nbsp; <kbd>Click</kbd> fire &nbsp; <kbd>R</kbd> reload</li>
+          <li><kbd>Space</kbd> shove &nbsp; <kbd>L</kbd> flashlight</li>
+          <li><kbd>Q</kbd><kbd>E</kbd> or right-drag: turn camera &nbsp; <kbd>Wheel</kbd> zoom</li>
+          <li><kbd>V</kbd> free camera &nbsp; <kbd>H</kbd> recentre &nbsp; <kbd>Esc</kbd> globe</li>
         </template>
         <template v-else>
           <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or drag: move camera</li>
@@ -226,6 +288,8 @@ onBeforeUnmount(() => {
         <dd>{{ stats.buildings.toLocaleString() }}</dd>
         <dt>Trees</dt>
         <dd>{{ stats.trees.toLocaleString() }}</dd>
+        <dt>Zombies</dt>
+        <dd>{{ stats.zombies }} ({{ stats.zombiesDrawn }} drawn)</dd>
       </dl>
     </template>
   </div>
@@ -243,6 +307,10 @@ onBeforeUnmount(() => {
 .city-host {
   position: absolute;
   inset: 0;
+}
+/* with the survivor in hand, the mouse is a gun sight: the 3D reticle replaces the arrow */
+.city-host.aiming {
+  cursor: crosshair;
 }
 .city-loading {
   position: absolute;
@@ -410,6 +478,33 @@ onBeforeUnmount(() => {
   background: #0f1729;
   color: var(--ink);
   font: 500 11px var(--f-mono);
+}
+.health {
+  position: relative;
+  width: min(260px, 60vw);
+  height: 18px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  overflow: hidden;
+  backdrop-filter: blur(6px);
+}
+.health i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, #8e2b25, #d4443a);
+  transition: width 0.15s linear;
+}
+.health.low i {
+  background: #e23a2e;
+}
+.health span {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font: 600 12px var(--f-mono);
+  color: var(--ink);
 }
 .stamina {
   position: relative;

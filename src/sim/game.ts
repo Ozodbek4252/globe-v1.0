@@ -88,6 +88,9 @@ export const GAME = {
   /** Zombies with their hands on you slow you down by this much each, to a floor. */
   grabSlow: 0.18,
   grabFloor: 0.4,
+  /** The helicopter is heard this many seconds before it lands, and every zombie in earshot comes. */
+  inbound: 14,
+  inboundNoise: 130,
 } as const;
 
 export type GameStatus = 'playing' | 'won' | 'lost';
@@ -117,6 +120,8 @@ export type GameEvent =
   | { type: 'shove'; x: number; y: number; heading: number }
   | { type: 'pickup'; kind: 'ammo' | 'medkit'; x: number; y: number }
   | { type: 'wave'; number: number; size: number; angle: number }
+  /** The helicopter is coming: `angle` is the direction it flies in from, `seconds` how long until it is here. */
+  | { type: 'rescue'; angle: number; seconds: number }
   | { type: 'won' }
   | { type: 'lost' };
 
@@ -201,6 +206,9 @@ export interface GameState {
   wave: number;
   nextWave: number;
   wavesOn: boolean;
+  /** The helicopter has been heard and is on its way. */
+  inbound: boolean;
+  inboundTimer: number;
   stats: GameStats;
   events: GameEvent[];
   rng: Rng;
@@ -259,6 +267,8 @@ export function createGame(world: GameWorld, options: GameOptions): GameState {
     wave: 0,
     nextWave: GAME.waves.first,
     wavesOn: options.waves ?? true,
+    inbound: false,
+    inboundTimer: 0,
     stats: { kills: 0, shots: 0, hits: 0, damageTaken: 0, shoves: 0 },
     events: [],
     rng,
@@ -402,6 +412,19 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
     }
 
     if (g.wavesOn && g.time >= g.nextWave) spawnWave(g, world);
+
+    // the helicopter's engines carry for miles: for its last seconds, everything comes
+    if (g.time >= g.rescueAt - GAME.inbound) {
+      if (!g.inbound) {
+        g.inbound = true;
+        emit(g, { type: 'rescue', angle: nextFloat(g.rng) * Math.PI * 2, seconds: GAME.inbound });
+      }
+      g.inboundTimer -= dt;
+      if (g.inboundTimer <= 0) {
+        addNoise(g, p.x, p.y, GAME.inboundNoise, 1.3);
+        g.inboundTimer = 1;
+      }
+    }
   }
 
   // the flow field the horde follows to reach the survivor

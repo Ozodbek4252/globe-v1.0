@@ -1,39 +1,57 @@
-# Simulation (placeholder)
+# Simulation
 
-The world-scale outbreak simulation will live here. Nothing is implemented yet.
+The rules of the game, with no pictures. Everything here is plain TypeScript that runs the same in
+the browser and in the tests. The 3D city ([src/city](../city)) draws what happens here; it does not
+decide anything.
+
+## What is here
+
+City scale (a survivor, a horde, a clock), all in metres, x east and y north:
+
+| File           | What it does                                                                                  |
+| -------------- | --------------------------------------------------------------------------------------------- |
+| `grid.ts`      | A square grid of what covers each cell (building, road, water, tree, bridge)                  |
+| `colliders.ts` | Walls and round obstacles in a spatial hash; `moveCircle` slides along them; water and spawns |
+| `raycast.ts`   | Walk a ray through the walls: line of sight, and where a bullet stops                         |
+| `flow.ts`      | A walkability grid and a flow field, so a chaser walks around buildings to reach the survivor |
+| `player.ts`    | The survivor: walking, sprinting, stamina, aiming (one step at a time)                        |
+| `horde.ts`     | Hundreds of zombies: eyes, ears and nose; wander, investigate, chase, attack                  |
+| `game.ts`      | One game: the pistol, noise, supplies, waves, the rescue clock, win and lose, an event queue  |
+
+`src/lib/rng.ts` is the seeded random number generator they all use.
 
 ## Rules for this folder
 
-- **Pure functions only.** No DOM, no Vue, no `fetch`, no `Date.now()`, no `Math.random()`.
-  Anything that needs time or randomness takes it as an argument, so a run can be replayed and tested.
-- **Plain data in, plain data out.** State is a serialisable object; `step(state, dt, inputs)`
-  returns the next state without mutating the old one.
-- **Keyed by country code** (`ADM0_A3`, e.g. `UZB`). The globe and the UI already use these codes.
-- **No geometry.** The simulation never needs polygons. It works on numbers per country (and per
-  city), and the renderer maps those numbers to colours.
+- **No DOM, no Vue, no Three.js, no `fetch`, no clocks, no `Math.random()`.** Time is an argument
+  (`dt`, ideally 1/60 s). Randomness comes from a seeded `Rng`, so **the same seed and the same inputs
+  replay the same game exactly.** The tests rely on it.
+- **Plain data.** Plain objects and typed arrays, nothing with behaviour attached.
+- **One exception to "never mutate":** the horde (and the collision world's scratch space) is updated
+  _in place_. A thousand zombies in parallel typed arrays would otherwise mean a thousand copies per
+  step, 60 times a second. `stepPlayer` still returns a new state; `stepGame` and `stepHorde` mutate
+  the state you give them. That is stated at the top of each file.
+- **Nothing inside a building.** A soak test plays minutes of a real game on the Tashkent map with
+  hundreds of zombies and checks every zombie, every few seconds, with an _independent_ point-in-polygon
+  test that does not use the game's own grids.
 
-## How it plugs into the rest of the app
+## How a step runs
 
-```
-map/data.ts  ──►  sim/ (pure)  ──►  map/modes.ts   (new modes: "Infection", "Cities lit", ...)
- countries,          step()          fill(c) = colour for a country, from sim state
- cities, pop
-```
+`stepGame(game, input, world, dt)`:
 
-- **Input data** is already loaded into `World`: country population, GDP and income group,
-  neighbours can be derived from the 110m geometry once, at load, and cached as adjacency lists.
-  `world.cities` has a population for every city (232 of them, 199 flagged as capitals).
-- **Output** is a map of `code -> number` per tick. A new entry in `map/modes.ts` turns it into a
-  fill colour and a legend, with no change to `src/globe` (it already takes a `fill` function).
-- **Cities going dark** is the Lights layer driven by sim state: the shader would take a per-city
-  "lit" value instead of reading only the static NASA texture. That is a change to
-  `globe/lightsGL.ts` and its shader, and the shader's content-hash test will need updating then.
-- **The game loop** (ticks, speed, pause) belongs in a composable next to `useGlobe`, not here.
+1. Move the survivor (`stepPlayer`), turning toward the aim point; zombies on them slow them down.
+2. Footsteps make noise: sprinting carries far, walking a little, standing still none.
+3. Reload, fire (a hit-scan ray, blocked by walls, one zombie hit), shove, pick up supplies.
+4. Every so often a wave appears out of sight; near the end the helicopter is heard and everything comes.
+5. Step the horde (`stepHorde`): each zombie thinks every 12th step, then moves, strikes or waits.
+6. Check for death (health 0) and rescue (the clock). Queue events for the renderer.
 
-## Suggested first steps
+The horde's senses: a zombie sees you if you are in front of it, in range, with a clear line;
+smells you from a few metres through walls; hears noises that reach it. It loses the trail after a few
+seconds without a sign. Walkers are slower than a walking survivor, runners faster than a walk but
+slower than a sprint, so stamina is the thing to manage.
 
-1. `types.ts`: `SimState` (per-country susceptible/infected/dead, per-city lit flag), `SimInputs`.
-2. `seed.ts`: a small seeded PRNG so runs are reproducible.
-3. `step.ts`: one tick of spread within a country and between neighbouring countries.
-4. Tests in `tests/` first: determinism (same seed, same result), conservation of people, and
-   that spread only follows adjacency or declared routes.
+## Ideas for later
+
+The world-scale outbreak (country by country, cities going dark on the globe) is not built. When it
+is, it belongs here too, keyed by country code (`ADM0_A3`), working on numbers per country and city and
+never on geometry, and its output can become a map mode in `map/modes.ts` with no change to `src/globe`.

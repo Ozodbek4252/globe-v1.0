@@ -390,6 +390,22 @@ describe('the rescue', () => {
     expect(events.filter((e) => e.type === 'won')).toHaveLength(1);
   });
 
+  it('is heard 14 seconds out, once, and every zombie in earshot comes', () => {
+    const { g, run, events, still } = setup({}, { rescueAt: 30 });
+    const far = still(100, 0);
+    g.horde.heading[far] = 0; // facing away, and 100 m off: out of sight
+    run({}, 15);
+    expect(g.inbound).toBe(false);
+    expect(g.horde.state[far]).toBe(ZState.WANDER);
+    run({}, 2);
+    expect(g.inbound).toBe(true);
+    expect(events.filter((e) => e.type === 'rescue')).toHaveLength(1);
+    expect(events.find((e) => e.type === 'rescue')).toMatchObject({ seconds: GAME.inbound });
+    expect(g.horde.state[far]).toBe(ZState.INVESTIGATE);
+    run({}, 10);
+    expect(events.filter((e) => e.type === 'rescue')).toHaveLength(1);
+  });
+
   it('does not arrive if the survivor died first', () => {
     const { g, run } = setup({}, { rescueAt: 5 });
     g.health = 0.001;
