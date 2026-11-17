@@ -5,6 +5,7 @@ import {
   createGameWorld,
   drainEvents,
   GAME,
+  interactionAt,
   NO_INPUT,
   rescueIn,
   stepGame,
@@ -13,6 +14,7 @@ import {
   type GameOptions,
 } from '../src/sim/game';
 import { hordeChecksum, spawnZombie, ZKind, ZState } from '../src/sim/horde';
+import { PLACES, type PlaceBuilding } from '../src/sim/places';
 
 const DT = 1 / 60;
 
@@ -27,8 +29,15 @@ const sq = (x: number, y: number, w: number, h = w): number[] => [
   y + h,
 ];
 
-/** A small town and a game in it, with no zombies and no waves unless asked for. */
-function setup(extra: Partial<ColliderSource> = {}, options: Partial<GameOptions> = {}) {
+/**
+ * A small town and a game in it, with no zombies and no waves unless asked for. `places` are the
+ * buildings the radar, shelters and shops are chosen from (they should also be in `extra.buildings`).
+ */
+function setup(
+  extra: Partial<ColliderSource> = {},
+  options: Partial<GameOptions> = {},
+  places: PlaceBuilding[] = [],
+) {
   const colliders = buildColliders({
     halfSize: 150,
     buildings: [],
@@ -37,7 +46,7 @@ function setup(extra: Partial<ColliderSource> = {}, options: Partial<GameOptions
     roads: [],
     ...extra,
   });
-  const world = createGameWorld(colliders, [0, 0]);
+  const world = createGameWorld(colliders, [0, 0], places);
   const g = createGame(world, {
     seed: 1,
     startX: 0,
@@ -56,6 +65,7 @@ function setup(extra: Partial<ColliderSource> = {}, options: Partial<GameOptions
       if (s > 0) {
         now.reload = false;
         now.shove = false;
+        now.interact = false;
       }
       stepGame(g, now, world, DT);
       events.push(...drainEvents(g));
@@ -471,5 +481,152 @@ describe('replays', () => {
 
   it('another seed gives another game', () => {
     expect(play(11)).not.toBe(play(12));
+  });
+});
+
+/** A district with one of each kind of place, far enough apart that each building has one job. */
+const DISTRICT: PlaceBuilding[] = [
+  { id: 1, outer: sq(250, 0, 40), height: 30, kind: 'apartments' }, // the radar
+  { id: 2, outer: sq(60, 0, 40), height: 8, kind: 'other', name: 'Hall' }, // the first shelter
+  { id: 3, outer: sq(0, 110, 30), height: 5, kind: 'commercial' }, // supplies near the start
+  { id: 4, outer: sq(-300, 0, 30), height: 5, kind: 'commercial' }, // the armory
+];
+
+function district(options: Partial<GameOptions> = {}) {
+  const t = setup(
+    { halfSize: 400, buildings: DISTRICT.map((b) => ({ outer: b.outer })) },
+    options,
+    DISTRICT,
+  );
+  const place = (kind: string) => t.world.places.find((p) => p.kind === kind)!;
+  /** Stand at a place's door. */
+  const goTo = (kind: string): void => {
+    const p = place(kind);
+    t.g.player = { ...t.g.player, x: p.x, y: p.y };
+  };
+  return { ...t, place, goTo };
+}
+
+describe('places', () => {
+  it('picks a radar, a shelter, supplies and an armory out of the district', () => {
+    const { world } = district();
+    expect(world.places.map((p) => p.kind).sort()).toEqual([
+      'armory',
+      'radar',
+      'shelter',
+      'supplies',
+    ]);
+  });
+
+  it('offers nothing away from a door, and the right thing at each', () => {
+    const { g, world, goTo } = district();
+    expect(interactionAt(g, world)).toBeNull();
+    goTo('radar');
+    expect(interactionAt(g, world)?.label).toBe('Power up the radar');
+    goTo('supplies');
+    expect(interactionAt(g, world)?.label).toMatch(/^Search /);
+    goTo('armory');
+    expect(interactionAt(g, world)?.place.kind).toBe('armory');
+  });
+
+  it('needs you to be at the door, not just near the building', () => {
+    const { g, world, place, goTo } = district();
+    goTo('radar');
+    const p = place('radar');
+    g.player = {
+      ...g.player,
+      x: p.x + p.nx * (PLACES.reach + 0.5),
+      y: p.y + p.ny * (PLACES.reach + 0.5),
+    };
+    expect(interactionAt(g, world)).toBeNull();
+  });
+
+  it('powers up the radar, once', () => {
+    const { g, run, goTo, count, place } = district();
+    expect(g.radarOn).toBe(false);
+    goTo('radar');
+    run({ interact: true }, DT);
+    expect(g.radarOn).toBe(true);
+    expect(g.used[place('radar').id]).toBe(true);
+    expect(count('radar')).toBe(1);
+    run({ interact: true }, 0.5);
+    expect(count('radar')).toBe(1);
+  });
+
+  it('does nothing when nothing is at the door', () => {
+    const { g, run, count } = district();
+    run({ interact: true }, 0.2);
+    expect(g.radarOn).toBe(false);
+    expect(count('loot')).toBe(0);
+  });
+
+  it('gives supplies when searched, once, and never more than you can carry', () => {
+    const { g, run, goTo, count, events, place } = district();
+    g.reserve = 0;
+    g.health = 40;
+    goTo('supplies');
+    run({ interact: true }, DT);
+    const loot = events.find((e) => e.type === 'loot');
+    expect(loot).toBeDefined();
+    expect(g.reserve + g.health).toBeGreaterThan(40); // took something
+    expect(g.used[place('supplies').id]).toBe(true);
+    expect(interactionAt(g, district().world)).toBeNull(); // (a different world: just checks no throw)
+    const before = [g.reserve, g.health];
+    run({ interact: true }, DT);
+    expect([g.reserve, g.health]).toEqual(before);
+    expect(count('loot')).toBe(1);
+    expect(g.reserve).toBeLessThanOrEqual(GAME.weapon.reserveCap);
+    expect(g.health).toBeLessThanOrEqual(GAME.health);
+  });
+
+  it('leaves a shop for later when you have no use for what is in it', () => {
+    const { g, run, goTo, place, events } = district();
+    g.reserve = GAME.weapon.reserveCap;
+    g.health = GAME.health;
+    goTo('supplies');
+    run({ interact: true }, DT);
+    expect(g.used[place('supplies').id]).toBe(false);
+    const loot = events.find((e) => e.type === 'loot');
+    expect(loot).toMatchObject({ ammo: 0, health: 0 });
+    // hurt now, and it is worth searching after all
+    g.health = 30;
+    run({ interact: true }, DT);
+    expect(g.used[place('supplies').id]).toBe(true);
+  });
+
+  it('the armory gives a lot of ammunition', () => {
+    const { g, run, goTo, events } = district();
+    g.reserve = 0;
+    goTo('armory');
+    run({ interact: true }, DT);
+    expect(g.reserve).toBe(GAME.loot.ammo * 2);
+    expect(events.find((e) => e.type === 'loot')).toMatchObject({ armory: true });
+  });
+
+  it('is shut to the dead', () => {
+    const { g, world, goTo } = district();
+    goTo('radar');
+    g.status = 'lost';
+    expect(interactionAt(g, world)).toBeNull();
+  });
+});
+
+describe('the next wave is announced', () => {
+  const angleGap = (a: number, b: number): number =>
+    Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
+
+  it('comes from the direction the game said, and the one after is already chosen', () => {
+    const { g, run, events } = setup({}, { waves: true });
+    const announced = g.waveAngle;
+    run({}, GAME.waves.first + 0.2);
+    const wave = events.find((e) => e.type === 'wave');
+    expect(wave).toBeDefined();
+    if (wave?.type === 'wave') expect(angleGap(wave.angle, announced)).toBeLessThan(0.5);
+    expect(g.waveAngle).not.toBe(announced);
+  });
+
+  it('is the same announcement for the same seed', () => {
+    expect(setup({}, { seed: 5 }).g.waveAngle).toBe(setup({}, { seed: 5 }).g.waveAngle);
+    expect(setup({}, { seed: 5 }).g.waveAngle).not.toBe(setup({}, { seed: 6 }).g.waveAngle);
   });
 });

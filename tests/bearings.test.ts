@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compassName, screenAngle } from '../src/city/bearings';
+import { compassName, screenAngle, screenOffset } from '../src/city/bearings';
 
 const deg = (d: number): number => (d * Math.PI) / 180;
 
@@ -50,5 +50,30 @@ describe('directions on the screen', () => {
   it('puts a diagonal halfway between', () => {
     expect(screenAngle(0, 1, 1)).toBeCloseTo(deg(45), 9);
     expect(screenAngle(0, -1, 1)).toBeCloseTo(deg(-45), 9);
+  });
+});
+
+describe('offsets on the screen', () => {
+  it('maps a city offset to [right, up] metres', () => {
+    // looking north: 10 m north is 10 m up, 5 m east is 5 m right
+    const [r, u] = screenOffset(0, 5, 10);
+    expect(r).toBeCloseTo(5, 9);
+    expect(u).toBeCloseTo(10, 9);
+    // looking west (a quarter turn): west is up, north is right
+    const [r2, u2] = screenOffset(deg(90), -7, 3);
+    expect(u2).toBeCloseTo(7, 9);
+    expect(r2).toBeCloseTo(3, 9);
+  });
+
+  it('keeps distances, whatever the camera', () => {
+    for (const yaw of [0, 0.7, 2.1, -1.3, 4]) {
+      const [r, u] = screenOffset(yaw, 30, -40);
+      expect(Math.hypot(r, u)).toBeCloseTo(50, 9);
+    }
+  });
+
+  it('agrees with the angle', () => {
+    const [r, u] = screenOffset(0.9, 12, 5);
+    expect(Math.atan2(r, u)).toBeCloseTo(screenAngle(0.9, 12, 5), 12);
   });
 });

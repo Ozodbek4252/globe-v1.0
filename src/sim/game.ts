@@ -5,7 +5,7 @@
 // kill, a hit taken) is queued as an event for the renderer to drain.
 
 import { createRng, nextFloat, nextInt, nextRange, type Rng } from '../lib/rng';
-import { clearance, insideBuilding, type Colliders } from './colliders';
+import type { Colliders } from './colliders';
 import {
   buildNavGrid,
   createFlowField,
@@ -13,7 +13,6 @@ import {
   reachableFrom,
   updateFlow,
   type FlowField,
-  type NavGrid,
 } from './flow';
 import {
   createHorde,
@@ -28,8 +27,14 @@ import {
   type Horde,
   type Noise,
 } from './horde';
+import { choosePlaces, PLACES, type Place, type PlaceBuilding } from './places';
 import { createPlayer, speedOf, stepPlayer, PLAYER, type PlayerState } from './player';
 import { rayCircleHit, rayWallHit } from './raycast';
+import { validSpot, type GameWorld } from './world';
+
+// These used to live here; they are re-exported so the rest of the code does not care.
+export { validSpot };
+export type { GameWorld };
 
 /** Tuning, in metres, seconds and points of health. */
 export const GAME = {
@@ -85,6 +90,8 @@ export const GAME = {
     runnerMax: 0.35,
   },
   pickups: { ammo: 14, ammoAmount: 15, medkit: 6, medkitAmount: 40, radius: 1.5 },
+  /** What searching a shop or clinic gives (a roll decides which). */
+  loot: { ammo: 24, health: 40, both: 0.2 },
   /** Zombies with their hands on you slow you down by this much each, to a floor. */
   grabSlow: 0.18,
   grabFloor: 0.4,
@@ -119,6 +126,10 @@ export type GameEvent =
   | { type: 'empty' }
   | { type: 'shove'; x: number; y: number; heading: number }
   | { type: 'pickup'; kind: 'ammo' | 'medkit'; x: number; y: number }
+  /** A shop, clinic or armory was searched: what it gave. */
+  | { type: 'loot'; place: number; ammo: number; health: number; armory: boolean }
+  /** The radar is on: the survivor can see the horde now. */
+  | { type: 'radar'; place: number }
   | { type: 'wave'; number: number; size: number; angle: number }
   /** The helicopter is coming: `angle` is the direction it flies in from, `seconds` how long until it is here. */
   | { type: 'rescue'; angle: number; seconds: number }
@@ -133,9 +144,10 @@ export interface GameInput {
   aim: readonly [number, number] | null;
   /** The trigger is held. */
   fire: boolean;
-  /** Asked to reload / to shove this step (the caller sends each once per press). */
+  /** Asked to reload / to shove / to use whatever is at the door (the caller sends each once per press). */
   reload: boolean;
   shove: boolean;
+  interact: boolean;
 }
 
 export const NO_INPUT: GameInput = {
@@ -146,19 +158,27 @@ export const NO_INPUT: GameInput = {
   fire: false,
   reload: false,
   shove: false,
+  interact: false,
 };
 
-/** The fixed things about a map that games on it share. */
-export interface GameWorld {
-  colliders: Colliders;
-  nav: NavGrid;
-  /** 1 where a person can walk to from the start. */
-  reachable: Uint8Array;
-}
-
-export function createGameWorld(colliders: Colliders, start: readonly [number, number]): GameWorld {
+/**
+ * Build the shared world for a map. `buildings` (the city's building list) is what the places are chosen
+ * from; with none, the map simply has no radar, shelters or shops.
+ */
+export function createGameWorld(
+  colliders: Colliders,
+  start: readonly [number, number],
+  buildings: readonly PlaceBuilding[] = [],
+): GameWorld {
   const nav = buildNavGrid(colliders);
-  return { colliders, nav, reachable: reachableFrom(nav, start[0], start[1]) };
+  const world: GameWorld = {
+    colliders,
+    nav,
+    reachable: reachableFrom(nav, start[0], start[1]),
+    places: [],
+  };
+  world.places = choosePlaces(buildings, start, world);
+  return world;
 }
 
 export interface GameOptions {
@@ -205,7 +225,13 @@ export interface GameState {
   pickups: Pickup[];
   wave: number;
   nextWave: number;
+  /** The direction (radians, counter-clockwise from east) the next wave will come from. */
+  waveAngle: number;
   wavesOn: boolean;
+  /** Which places have been used up: shops and the armory once searched, the radar once powered. */
+  used: boolean[];
+  /** The radar is on, so the horde and the next wave are visible. */
+  radarOn: boolean;
   /** The helicopter has been heard and is on its way. */
   inbound: boolean;
   inboundTimer: number;
@@ -226,18 +252,6 @@ export function drainEvents(g: GameState): GameEvent[] {
   const events = g.events;
   g.events = [];
   return events;
-}
-
-/** Whether (x, y) is somewhere a person could stand and could walk to from the start. */
-export function validSpot(world: GameWorld, x: number, y: number, needed = 1): boolean {
-  const { nav, colliders } = world;
-  if (Math.abs(x) > colliders.half - 6 || Math.abs(y) > colliders.half - 6) return false;
-  const cx = navCell(nav, x);
-  const cy = navCell(nav, y);
-  if (cx < 0 || cy < 0 || cx >= nav.size || cy >= nav.size) return false;
-  const index = cy * nav.size + cx;
-  if (!nav.open[index] || !world.reachable[index]) return false;
-  return !insideBuilding(colliders, x, y) && clearance(colliders, x, y, needed + 1) >= needed;
 }
 
 export function createGame(world: GameWorld, options: GameOptions): GameState {
@@ -266,7 +280,10 @@ export function createGame(world: GameWorld, options: GameOptions): GameState {
     pickups: [],
     wave: 0,
     nextWave: GAME.waves.first,
+    waveAngle: nextFloat(rng) * Math.PI * 2,
     wavesOn: options.waves ?? true,
+    used: world.places.map(() => false),
+    radarOn: false,
     inbound: false,
     inboundTimer: 0,
     stats: { kills: 0, shots: 0, hits: 0, damageTaken: 0, shoves: 0 },
@@ -404,6 +421,7 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
 
     stepWeapon(g, input, face, colliders, dt);
     if (input.shove) tryShove(g);
+    if (input.interact) interact(g, world);
     collectPickups(g);
 
     // regain a little health after a quiet spell
@@ -604,12 +622,82 @@ function collectPickups(g: GameState): void {
   }
 }
 
+/** What the survivor could do right now at a door, if anything. */
+export interface Interaction {
+  place: Place;
+  /** A short verb phrase for the prompt: "Power up the radar", "Search Baraka Savdo". */
+  label: string;
+}
+
+/** The place whose door the survivor is standing at, and what using it would do. Null if none. */
+export function interactionAt(g: GameState, world: GameWorld): Interaction | null {
+  if (g.status !== 'playing') return null;
+  let near: Place | null = null;
+  let nearest: number = PLACES.reach;
+  for (const place of world.places) {
+    const d = Math.hypot(place.x - g.player.x, place.y - g.player.y);
+    if (d <= nearest) {
+      nearest = d;
+      near = place;
+    }
+  }
+  if (!near) return null;
+  switch (near.kind) {
+    case 'radar':
+      return g.used[near.id] ? null : { place: near, label: 'Power up the radar' };
+    case 'supplies':
+    case 'armory':
+      return g.used[near.id] ? null : { place: near, label: `Search ${near.name}` };
+    default:
+      return null; // shelters come next
+  }
+}
+
+/** Use whatever is at the survivor's door. Returns whether anything happened. */
+function interact(g: GameState, world: GameWorld): boolean {
+  const here = interactionAt(g, world);
+  if (!here) return false;
+  const { place } = here;
+  if (place.kind === 'radar') {
+    g.used[place.id] = true;
+    g.radarOn = true;
+    emit(g, { type: 'radar', place: place.id });
+    return true;
+  }
+  // supplies and the armory: something to take
+  let ammo = 0;
+  let health = 0;
+  const roll = nextFloat(g.rng);
+  if (place.kind === 'armory') ammo = GAME.loot.ammo * 2;
+  else if (roll < GAME.loot.both) {
+    ammo = Math.round(GAME.loot.ammo / 2);
+    health = Math.round(GAME.loot.health / 2);
+  } else if (roll < 0.6) ammo = GAME.loot.ammo;
+  else health = GAME.loot.health;
+  const gotAmmo = Math.min(ammo, GAME.weapon.reserveCap - g.reserve);
+  const gotHealth = Math.min(health, GAME.health - g.health);
+  g.reserve += gotAmmo;
+  g.health += gotHealth;
+  // with nothing useful to take (full pack, full health) the place is left as it was, for later
+  g.used[place.id] = gotAmmo > 0 || gotHealth > 0;
+  emit(g, {
+    type: 'loot',
+    place: place.id,
+    ammo: gotAmmo,
+    health: Math.round(gotHealth),
+    armory: place.kind === 'armory',
+  });
+  return true;
+}
+
 /** A band of zombies appears out of sight, some distance away, already on the survivor's trail. */
 function spawnWave(g: GameState, world: GameWorld): void {
   const { rng, player: p, horde: h } = g;
   const W = GAME.waves;
   g.wave++;
   g.nextWave += W.every;
+  const heading = g.waveAngle;
+  g.waveAngle = nextFloat(rng) * Math.PI * 2; // where the one after will come from
   const size = W.base + W.perWave * g.wave;
   const runner = Math.min(W.runnerMax, W.runnerChance * g.wave);
 
@@ -617,14 +705,17 @@ function spawnWave(g: GameState, world: GameWorld): void {
   let sy = p.y;
   let angle = 0;
   let found = false;
+  // The direction was settled when the last wave came (the radar shows it), so it comes from there:
+  // first from a spot the survivor cannot see, then from any spot that way, and only as a last resort
+  // from anywhere at all.
   for (let attempt = 0; attempt < 80 && !found; attempt++) {
-    const a = nextFloat(rng) * Math.PI * 2;
+    const aimed = attempt < 70;
+    const a = aimed ? heading + (nextFloat(rng) - 0.5) * 0.9 : nextFloat(rng) * Math.PI * 2;
     const r = nextRange(rng, W.minRange, W.maxRange);
     const x = p.x + Math.cos(a) * r;
     const y = p.y + Math.sin(a) * r;
     if (!validSpot(world, x, y, 1.5)) continue;
-    // prefer places the survivor cannot see; after many tries, settle for any
-    if (attempt < 60 && rayWallHit(world.colliders, p.x, p.y, x, y) === Infinity) continue;
+    if (attempt < 40 && rayWallHit(world.colliders, p.x, p.y, x, y) === Infinity) continue;
     sx = x;
     sy = y;
     angle = a;

@@ -8,8 +8,10 @@ import type {
   GameNotice,
   GameSetup,
   PlayerStatus,
+  RadarFrame,
 } from '../city/createCity';
 import GameHud from './GameHud.vue';
+import RadarScope from './RadarScope.vue';
 
 const props = defineProps<{ cityId: string; title: string }>();
 const emit = defineEmits<{ close: [] }>();
@@ -31,12 +33,14 @@ const sunElevation = ref(0);
 const stats = shallowRef<CityStats | null>(null);
 const showStats = ref(false);
 const player = shallowRef<PlayerStatus | null>(null);
+const radar = shallowRef<RadarFrame | null>(null);
 
 let scene: CityScene | null = null;
 let disposed = false;
 let stopStats: (() => void) | null = null;
 let stopPlayer: (() => void) | null = null;
 let stopGame: (() => void) | null = null;
+let stopRadar: (() => void) | null = null;
 
 /**
  * Optional deep link, handy for sharing a spot or reproducing a screenshot. Metres are east/north of
@@ -144,6 +148,9 @@ onMounted(async () => {
     stopGame = created.onGame((n) => {
       hud.value?.push(n);
     });
+    stopRadar = created.onRadar((f) => {
+      radar.value = f;
+    });
     ready.value = true;
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'The city could not be loaded.';
@@ -160,6 +167,7 @@ onBeforeUnmount(() => {
   stopStats?.();
   stopPlayer?.();
   stopGame?.();
+  stopRadar?.();
   scene?.destroy();
   scene = null;
   delete (window as unknown as { __city?: CityScene }).__city;
@@ -187,6 +195,7 @@ onBeforeUnmount(() => {
     </div>
 
     <template v-if="ready">
+      <RadarScope :frame="radar" />
       <GameHud ref="hud" :player="player" @restart="restart" @close="emit('close')" />
 
       <button
@@ -258,7 +267,9 @@ onBeforeUnmount(() => {
         <template v-if="!player || player.camera === 'follow'">
           <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk &nbsp; <kbd>Shift</kbd> run</li>
           <li><kbd>Mouse</kbd> aim &nbsp; <kbd>Click</kbd> fire &nbsp; <kbd>R</kbd> reload</li>
-          <li><kbd>Space</kbd> shove &nbsp; <kbd>L</kbd> flashlight</li>
+          <li>
+            <kbd>Space</kbd> shove &nbsp; <kbd>F</kbd> use a door &nbsp; <kbd>L</kbd> flashlight
+          </li>
           <li><kbd>Q</kbd><kbd>E</kbd> or right-drag: turn camera &nbsp; <kbd>Wheel</kbd> zoom</li>
           <li><kbd>V</kbd> free camera &nbsp; <kbd>H</kbd> recentre &nbsp; <kbd>Esc</kbd> globe</li>
         </template>

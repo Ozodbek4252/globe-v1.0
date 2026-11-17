@@ -45,6 +45,7 @@ describe('minutes of play in the real Tashkent', () => {
         fire: Math.floor(time) % 2 === 0,
         reload: s % 600 === 0,
         shove: s % 240 === 0,
+        interact: s % 300 === 0,
       };
       // keep the survivor alive so the soak covers the whole run
       if (g.health < 30) g.health = 100;

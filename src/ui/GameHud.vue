@@ -11,7 +11,7 @@ const hits = ref<{ id: number; angle: number }[]>([]);
 const vignette = ref(0);
 const banner = ref<{
   id: number;
-  tone: 'wave' | 'rescue';
+  tone: 'wave' | 'rescue' | 'radar';
   title: string;
   sub: string;
   angle: number | null;
@@ -71,6 +71,28 @@ function push(n: GameNotice): void {
     case 'pickup':
       toast.value = { id, text: n.kind === 'ammo' ? '+15 rounds' : '+40 health' };
       later(() => toast.value?.id === id && (toast.value = null), 1600);
+      break;
+    case 'loot': {
+      const got = [n.ammo > 0 ? `+${n.ammo} rounds` : '', n.health > 0 ? `+${n.health} health` : '']
+        .filter(Boolean)
+        .join(' · ');
+      toast.value = { id, text: got || 'Nothing here you can use right now' };
+      announcement.value = got
+        ? `${n.place}: ${got}.`
+        : `${n.place}: nothing you can use right now.`;
+      later(() => toast.value?.id === id && (toast.value = null), 2200);
+      break;
+    }
+    case 'radar':
+      banner.value = {
+        id,
+        tone: 'radar',
+        title: 'Radar online',
+        sub: 'The horde is on your scope, and so is the direction of the next wave.',
+        angle: null,
+      };
+      announcement.value = 'Radar online. The horde and the next wave are now on your scope.';
+      later(() => banner.value?.id === id && (banner.value = null), 6000);
       break;
     case 'restart':
       reset();
@@ -141,6 +163,22 @@ const accuracy = computed(() =>
           >Wave {{ player.wave }} · {{ plural(player.zombies, 'zombie') }} out there ·
           {{ plural(player.near, 'zombie') }} near · {{ plural(player.kills, 'kill') }}</span
         >
+        <span v-if="player.objective" class="hud-objective">
+          <span
+            class="hud-arrow"
+            aria-hidden="true"
+            :style="{ transform: `rotate(${player.objective.angle}rad)` }"
+            >▲</span
+          >
+          {{ player.objective.text }} · {{ Math.round(player.objective.distance) }} m
+          {{ player.objective.compass }}
+        </span>
+      </div>
+
+      <div v-if="player.prompt && player.camera === 'follow'" class="hud-prompt" role="status">
+        <kbd>F</kbd>
+        <span>{{ player.prompt.label }}</span>
+        <small>{{ player.prompt.name }}</small>
       </div>
 
       <div
@@ -326,11 +364,64 @@ const accuracy = computed(() =>
   font-size: 12px;
   color: var(--muted);
 }
+.hud-objective {
+  margin-top: 4px;
+  padding: 3px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(74, 168, 255, 0.5);
+  background: rgba(8, 20, 36, 0.7);
+  font: 500 12px var(--f-mono);
+  color: #bcd9ff;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.hud-objective .hud-arrow {
+  display: inline-block;
+  color: #4aa8ff;
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* ---- the door you are standing at */
+.hud-prompt {
+  position: absolute;
+  left: 50%;
+  bottom: 122px;
+  transform: translateX(-50%);
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  column-gap: 10px;
+  padding: 8px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(240, 181, 74, 0.7);
+  background: rgba(20, 16, 8, 0.82);
+  backdrop-filter: blur(6px);
+  animation: hud-in 0.2s ease-out;
+}
+.hud-prompt kbd {
+  grid-row: span 2;
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid #6a5a2a;
+  background: #2a2412;
+  font: 600 15px var(--f-mono);
+  color: #ffe9a8;
+}
+.hud-prompt span {
+  font: 600 15px var(--f-display);
+  letter-spacing: 0.04em;
+}
+.hud-prompt small {
+  font-size: 11.5px;
+  color: var(--muted);
+}
 
 /* ---- announcements */
 .hud-banner {
   position: absolute;
-  top: 170px;
+  top: 204px;
   left: 50%;
   transform: translateX(-50%);
   display: grid;
@@ -348,6 +439,10 @@ const accuracy = computed(() =>
 .hud-banner.rescue {
   border-color: rgba(255, 210, 122, 0.6);
   background: rgba(24, 18, 6, 0.74);
+}
+.hud-banner.radar {
+  border-color: rgba(74, 168, 255, 0.6);
+  background: rgba(6, 16, 30, 0.78);
 }
 .hud-banner strong {
   font: 700 20px var(--f-display);
@@ -372,7 +467,7 @@ const accuracy = computed(() =>
 .hud-toast {
   position: absolute;
   left: 50%;
-  bottom: 150px;
+  bottom: 178px;
   transform: translateX(-50%);
   padding: 4px 12px;
   border-radius: 999px;
@@ -577,7 +672,7 @@ const accuracy = computed(() =>
     font-size: 28px;
   }
   .hud-banner {
-    top: 206px;
+    top: 240px;
   }
   .hud-ammo {
     bottom: 56px;

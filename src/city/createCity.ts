@@ -36,6 +36,7 @@ import {
   createGameWorld,
   drainEvents,
   GAME,
+  interactionAt,
   rescueIn,
   stepGame,
   validSpot,
@@ -46,13 +47,15 @@ import {
 } from '../sim/game';
 import { sendHunting, spawnZombie, ZKind, ZState } from '../sim/horde';
 import { speedOf, type PlayerState } from '../sim/player';
-import { compassName, screenAngle } from './bearings';
+import type { PlaceKind } from '../sim/places';
+import { compassName, screenAngle, screenOffset } from './bearings';
 import { createSurvivor } from './character';
 import { createCutaway, type Cutaway } from './cutaway';
 import { createEffects, type AimMode } from './effects';
 import { openestYaw } from './followYaw';
 import { createHelicopter } from './helicopter';
 import { createPickupMarkers, type PickupMarkers } from './pickups';
+import { createPlaceMarkers } from './placeMarkers';
 import { createZombieRenderer } from './zombies';
 import {
   MAX_DISTANCE,
@@ -157,6 +160,26 @@ export interface PlayerStatus {
   /** Zombies standing anywhere, and zombies within 40 m. */
   zombies: number;
   near: number;
+  /** What the survivor could do at the door they are standing at (null when not at one). */
+  prompt: { label: string; name: string } | null;
+  /** The radar is on: the minimap and the wave warning are available. */
+  radarOn: boolean;
+  /** The next goal, how far off it is, and where it lies on the screen (radians clockwise from up). */
+  objective: { text: string; distance: number; angle: number; compass: string } | null;
+}
+
+/** The radar's view of the world, centred on the survivor with "up" ahead of the camera. */
+export interface RadarFrame {
+  /** Metres from the centre to the edge of the scope. */
+  range: number;
+  /** Zombies: x (right), y (up) in metres, then 1 if hunting or striking, else 0: flat triples. */
+  zombies: Float32Array;
+  places: { kind: PlaceKind; x: number; y: number; used: boolean }[];
+  /** Where north is on the scope, and which way the survivor faces: radians clockwise from up. */
+  north: number;
+  heading: number;
+  /** The next wave: seconds until it, which way it comes from on the scope, and how many. */
+  wave: { seconds: number; angle: number; size: number } | null;
 }
 
 /** Things that happen in the game that the HUD wants to flash up. Angles are clockwise from screen-up. */
@@ -164,6 +187,9 @@ export type GameNotice =
   | { type: 'wave'; number: number; size: number; compass: string; angle: number }
   | { type: 'hurt'; amount: number; angle: number }
   | { type: 'pickup'; kind: 'ammo' | 'medkit' }
+  /** A shop, clinic or armory was searched (all zero when there was nothing you could use). */
+  | { type: 'loot'; ammo: number; health: number; armory: boolean; place: string }
+  | { type: 'radar'; place: string }
   | { type: 'rescue'; seconds: number }
   /** A new game has begun: forget everything announced. */
   | { type: 'restart' }
@@ -190,6 +216,8 @@ export interface CityDebug {
   skip(seconds: number): void;
   /** Set the game clock to an exact time. */
   setTime(seconds: number): void;
+  /** Put the survivor at the door of the first place of this kind. Returns false if there is none. */
+  goTo(kind: PlaceKind): boolean;
   /** Stop the game stepping (the picture keeps drawing), so a scene can be held still. */
   freeze(on: boolean): void;
   /** The numbers worth checking. */
@@ -208,6 +236,9 @@ export interface CityDebug {
     y: number;
     /** Which way the survivor faces, in radians counter-clockwise from east. */
     heading: number;
+    radarOn: boolean;
+    /** How many places have been used up. */
+    used: number;
   };
 }
 
@@ -258,11 +289,16 @@ export interface CityScene {
   onPlayer(listener: (status: PlayerStatus) => void): Unsubscribe;
   /** Fires when something happens that the HUD should announce. */
   onGame(listener: (notice: GameNotice) => void): Unsubscribe;
+  /** Fires about ten times a second once the radar is on (and once with null when it goes off). */
+  onRadar(listener: (frame: RadarFrame | null) => void): Unsubscribe;
   /** Start again from the beginning with a new random game. */
   restart(): void;
   debug?: CityDebug;
   destroy(): void;
 }
+
+/** How far the radar scope sees, in metres. */
+const RADAR_RANGE = 140;
 
 const nextFrame = (): Promise<void> => new Promise((r) => requestAnimationFrame(() => r()));
 const smoothstep = (a: number, b: number, x: number): number => {
@@ -538,7 +574,7 @@ export async function createCityScene(
 
   // ---------- the game: the horde, the pistol, supplies, the rescue clock ----------
   progress(0.82, 'Gathering the horde');
-  const gameWorld = createGameWorld(colliders, [spawnX, spawnY]);
+  const gameWorld = createGameWorld(colliders, [spawnX, spawnY], data.buildings);
   const setup = options.game ?? {};
   let seed = setup.seed ?? Math.floor(Math.random() * 0xffffffff);
   const newGame = (): GameState =>
@@ -566,6 +602,12 @@ export async function createCityScene(
   scene.add(effects.object);
   let pickupMarkers: PickupMarkers = createPickupMarkers(game.pickups);
   scene.add(pickupMarkers.object);
+  const placeMarkers = createPlaceMarkers(
+    gameWorld.places,
+    gameWorld.places.map((p) => data.buildings[p.building].outer),
+  );
+  own(placeMarkers);
+  scene.add(placeMarkers.object);
   const helicopter = createHelicopter();
   own(helicopter);
   scene.add(helicopter.object);
@@ -719,6 +761,7 @@ export async function createCityScene(
   // one-shot requests, kept until the first simulation step of a frame takes them
   let reloadQueued = false;
   let shoveQueued = false;
+  let interactQueued = false;
   let triggerHeld = false;
   let aimScreen: { x: number; y: number } | null = null;
   const onKeyDown = (e: KeyboardEvent): void => {
@@ -732,6 +775,8 @@ export async function createCityScene(
       if (!e.repeat) reloadQueued = true;
     } else if (k === ' ' && cameraMode === 'follow') {
       if (!e.repeat) shoveQueued = true;
+    } else if (k === 'f' && cameraMode === 'follow') {
+      if (!e.repeat) interactQueued = true; // use the door you are standing at
     } else if (k === 'v') setCameraMode(cameraMode === 'follow' ? 'free' : 'follow');
     else if (k === 'l') flashlightPref = flashlightOn() ? 'off' : 'on';
     else if (k === 't' && tower) {
@@ -831,6 +876,8 @@ export async function createCityScene(
   const stats = createEmitter<CityStats>();
   const playerEvents = createEmitter<PlayerStatus>();
   const notices = createEmitter<GameNotice>();
+  const radarFrames = createEmitter<RadarFrame | null>();
+  let radarWasOn = false;
   const SIM_STEP = 1 / 60;
   let simClock = 0;
   let playerAt = 0;
@@ -857,6 +904,18 @@ export async function createCityScene(
         break;
       case 'pickup':
         notices.emit({ type: 'pickup', kind: e.kind });
+        break;
+      case 'loot':
+        notices.emit({
+          type: 'loot',
+          ammo: e.ammo,
+          health: e.health,
+          armory: e.armory,
+          place: gameWorld.places[e.place].name,
+        });
+        break;
+      case 'radar':
+        notices.emit({ type: 'radar', place: gameWorld.places[e.place].name });
         break;
       case 'wave':
         notices.emit({
@@ -947,7 +1006,7 @@ export async function createCityScene(
     pickupMarkers.dispose();
     pickupMarkers = createPickupMarkers(game.pickups);
     scene.add(pickupMarkers.object);
-    reloadQueued = shoveQueued = false;
+    reloadQueued = shoveQueued = interactQueued = false;
     simClock = 0;
     goal = cameraMode === 'follow' ? recentred() : { ...home };
     easeRate = Math.max(easeRate, 10);
@@ -999,6 +1058,7 @@ export async function createCityScene(
       fire: walking && triggerHeld,
       reload: reloadQueued,
       shove: shoveQueued,
+      interact: interactQueued,
     };
     simClock = debugFrozen ? 0 : simClock + dt;
     let steps = 0;
@@ -1009,7 +1069,8 @@ export async function createCityScene(
       // a reload or shove request counts once, on the first step that sees it
       input.reload = false;
       input.shove = false;
-      if (steps === 0) reloadQueued = shoveQueued = false;
+      input.interact = false;
+      if (steps === 0) reloadQueued = shoveQueued = interactQueued = false;
       for (const e of drainEvents(game)) handleEvent(e);
       simClock -= SIM_STEP;
       steps++;
@@ -1072,6 +1133,7 @@ export async function createCityScene(
     // the horde, the supplies, the shots and the rescue
     zombies.update(game.horde, dt, current.x, -current.z, current.distance);
     pickupMarkers.sync(game.pickups, now / 1000, darkness);
+    placeMarkers.sync(game.used, now / 1000, darkness, current.distance);
     const aimMode: AimMode =
       game.reloading > 0 ? 'reloading' : game.ammo === 0 && game.reserve === 0 ? 'empty' : 'ready';
     effects.setAim(
@@ -1105,6 +1167,63 @@ export async function createCityScene(
         const dy = h.y[i] - player.y;
         if (dx * dx + dy * dy < 1600) near++;
       }
+
+      // what could be done at the door here, and the next goal
+      const here = interactionAt(game, gameWorld);
+      const radarPlace = gameWorld.places.find((p) => p.kind === 'radar');
+      let objective: PlayerStatus['objective'] = null;
+      if (radarPlace && !game.radarOn && gamePhase === 'playing') {
+        const dx = radarPlace.x - player.x;
+        const dy = radarPlace.y - player.y;
+        objective = {
+          text: 'Power up the radar',
+          distance: Math.hypot(dx, dy),
+          angle: screenAngle(current.yaw, dx, dy),
+          compass: compassName(Math.atan2(dy, dx)),
+        };
+      }
+
+      // the radar scope: everything within range, turned so that "up" is ahead of the camera
+      if (game.radarOn) {
+        const range = RADAR_RANGE;
+        const found: number[] = [];
+        for (let i = 0; i < h.used; i++) {
+          const s = h.state[i];
+          if (s >= ZState.DEAD) continue;
+          const dx = h.x[i] - player.x;
+          const dy = h.y[i] - player.y;
+          if (dx * dx + dy * dy > range * range) continue;
+          const [rx, ry] = screenOffset(current.yaw, dx, dy);
+          found.push(rx, ry, s === ZState.WANDER ? 0 : 1);
+        }
+        radarFrames.emit({
+          range,
+          zombies: Float32Array.from(found),
+          places: gameWorld.places.map((p) => {
+            const [rx, ry] = screenOffset(current.yaw, p.x - player.x, p.y - player.y);
+            return { kind: p.kind, x: rx, y: ry, used: game.used[p.id] };
+          }),
+          north: screenAngle(current.yaw, 0, 1),
+          heading: screenAngle(current.yaw, Math.cos(player.heading), Math.sin(player.heading)),
+          wave:
+            game.wavesOn && gamePhase === 'playing' && !game.inbound
+              ? {
+                  seconds: Math.max(0, game.nextWave - game.time),
+                  angle: screenAngle(
+                    current.yaw,
+                    Math.cos(game.waveAngle),
+                    Math.sin(game.waveAngle),
+                  ),
+                  size: GAME.waves.base + GAME.waves.perWave * (game.wave + 1),
+                }
+              : null,
+        });
+        radarWasOn = true;
+      } else if (radarWasOn) {
+        radarFrames.emit(null);
+        radarWasOn = false;
+      }
+
       playerEvents.emit({
         x: player.x,
         y: player.y,
@@ -1129,6 +1248,9 @@ export async function createCityScene(
         wave: game.wave,
         zombies: game.horde.alive,
         near,
+        prompt: here ? { label: here.label, name: here.place.name } : null,
+        radarOn: game.radarOn,
+        objective,
       });
     }
 
@@ -1211,6 +1333,7 @@ export async function createCityScene(
     onStats: stats.on,
     onPlayer: playerEvents.on,
     onGame: notices.on,
+    onRadar: radarFrames.on,
     restart,
     debug: options.debug
       ? {
@@ -1247,6 +1370,13 @@ export async function createCityScene(
           setTime(seconds) {
             game.time = seconds;
           },
+          goTo(kind) {
+            const place = gameWorld.places.find((p) => p.kind === kind);
+            if (!place) return false;
+            game.player = { ...game.player, x: place.x, y: place.y, vx: 0, vy: 0 };
+            player = previous = game.player;
+            return true;
+          },
           freeze(on) {
             debugFrozen = on;
           },
@@ -1264,6 +1394,8 @@ export async function createCityScene(
             x: game.player.x,
             y: game.player.y,
             heading: game.player.heading,
+            radarOn: game.radarOn,
+            used: game.used.filter(Boolean).length,
           }),
         }
       : undefined,
@@ -1284,6 +1416,7 @@ export async function createCityScene(
       stats.clear();
       playerEvents.clear();
       notices.clear();
+      radarFrames.clear();
       survivor.dispose();
       pickupMarkers.dispose();
       sun.shadow.map?.dispose();
