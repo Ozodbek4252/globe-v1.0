@@ -88,14 +88,17 @@ src/
     textures.ts               facades with lit windows, road markings, ground grain
     cameraRig.ts  followYaw.ts  the camera maths, and which side the follow camera starts on
     character.ts  cutaway.ts  the survivor's low-poly body and walk cycle; see-through occluders
-    zombies.ts  effects.ts    the horde as one instanced mesh; tracers, flashes, blood, noise rings
+    zombies.ts  people.ts     the horde and the survivors, each as instanced meshes (walk cycle in the shader)
+    effects.ts                tracers, flashes, blood, noise rings, the aim reticle
     pickups.ts  helicopter.ts supply crates; the rescue helicopter
+    placeMarkers.ts           the outline, light column and door ring on buildings with a job
+    placeStyle.ts             their colours (no Three.js, so the HUD can use them)
     bearings.ts               compass words and screen directions (pure, tested)
     createCity.ts  load.ts    builds the scene and runs it; loads public/cities/<id>.json
   lib/                        sun position, formatters, sphere helpers, storage, url, hash, rng
-  ui/                         Vue components (dropdown, legend, search, picks, card, CityView, GameHud...)
-  sim/                        pure, seeded game rules: colliders, raycast, flow field, player,
-                              horde, game. See src/sim/README.md
+  ui/                         Vue components (dropdown, legend, search, picks, card, CityView, GameHud, RadarScope...)
+  sim/                        pure, seeded game rules: colliders, raycast, flow field, player, horde,
+                              places, civilians, game. See src/sim/README.md
   styles/                     tokens.css, base.css
 tests/                        Vitest
 scripts/                      check.ps1, editor-deps.ps1, fetch-city.mjs (OpenStreetMap extractor)
@@ -128,34 +131,57 @@ so the globe page stays light.
   metres). All parts are optional; `view` alone starts in the free camera. Game options are in
   [The game](#the-game).
 
+- **Heights:** OpenStreetMap tags a height for only about 5% of Tashkent's buildings, so the rest are
+  estimated from the kind of building and its footprint. The estimate is deterministic.
+
 ## The game
 
-Survive until the helicopter lands. The clock is five minutes.
+Survive until the helicopter lands. The clock is five minutes. Save as many people as you can on the way.
 
-- **Aim and fire:** the mouse aims (the survivor turns to face it), holding the left button fires the
-  pistol. 15 rounds a magazine, 45 in reserve; `R` reloads (it also reloads by itself when empty).
-  Bullets stop at walls. A zombie takes two hits, a runner one.
+**Fighting**
+
+- **Aim and fire:** the mouse aims (the survivor turns to face it), holding the left button fires.
+  The pistol has 15 rounds a magazine and 45 in reserve; `R` reloads (it also reloads by itself when
+  empty). Bullets stop at walls. A zombie takes two pistol hits, a runner one.
 - **Shove:** `Space` knocks back and stuns whatever is in front of you (every 1.6 seconds).
-- **Noise matters.** Zombies see in front of them and smell very close, but they also _hear_: a gunshot
-  carries about 60 m, sprinting about 16 m, walking about 5 m, standing still none. Rings on the
+- **Noise matters.** Zombies see in front of them and smell very close, but they also _hear_: a pistol
+  shot carries about 60 m, sprinting about 16 m, walking about 5 m, standing still none. Rings on the
   ground show how far each sound went. Zombies that lose you give up after a few seconds.
 - **Speed matters.** Walkers are slower than you walking. Runners are faster than a walk but slower
   than a sprint. Sprinting is loud and tires you out; zombies hanging on slow you down.
-- **Supplies:** ammunition crates and first-aid kits lie about, each marked by a faint column of light.
-  Health comes back a little by itself, but only up to 60 and only after a quiet spell.
-- **Waves:** a band appears out of sight every 40 seconds, bigger each time, already on your trail; the
-  banner says which way it comes from. In the last 14 seconds the helicopter is heard and every zombie
-  in earshot comes for you.
-- **Zombies as dots:** from the free camera or when zoomed out, each zombie also shows as a red dot
-  (brighter when hunting), so the horde reads from far away.
+- **Waves:** a band appears out of sight every 40 seconds, bigger each time, already on your trail. In
+  the last 14 seconds the helicopter is heard and every zombie in earshot comes for you.
 
-Game options go on the link, all optional: `&seed=123` replays the same game (same zombies, supplies and
-waves), `&rescue=60` sets the clock in seconds, `&zombies=0` removes the zombies in the streets at the
-start (the number is groups; default 70), `&waves=0` switches the waves off. `&debug=1` puts the
-scene on `window.__city.debug` with levers for staging scenes (spawn zombies, jump the clock).
+**Buildings with jobs.** A few real buildings are marked with a glowing outline and a column of light,
+each in a colour for its job. Stand at the ring on the street in front and press `F`:
 
-- **Heights:** OpenStreetMap tags a height for only about 5% of Tashkent's buildings, so the rest are
-  estimated from the kind of building and its footprint. The estimate is deterministic.
+- **Radar** (blue, a few hundred metres off): power it up and a scope appears showing the horde, the
+  buildings and the people, with the direction and countdown of the next wave on its rim.
+- **Shelters** (teal): go inside to hide, heal to full and reload. You cannot move or shoot, and nothing
+  can see or hear you, so ordinary pursuers give up after a few seconds. But zombies already on your
+  trail, which means every wave, keep coming to the door and batter it. When it gives way you are thrown
+  out hurt, the shelter is lost for good, and everyone behind it with you. A door with people inside
+  draws zombies even when you are not there. Hiding in the nearest shelter all game does not win.
+- **Supplies** (amber: shops and clinics): search once for ammunition or health.
+- **Armory** (orange): a shotgun. `1` and `2` switch guns; each keeps its own ammunition. Eight pellets in
+  a wide cone: it kills close up, is weak at range and useless past 16 m, is slow to fire and to
+  reload, and is louder than the pistol (75 m).
+
+**Survivors.** About ten people hide around the map, each with a green ring. Walk up to one and they
+follow you, a little slower than you walk and well behind when you sprint. Zombies go for them too, and
+hiding ones can be found by zombies that wander past. Take them into a shelter with you and they stay
+inside (leaving, you leave them), or keep them with you and bring them to the helicopter. At the end it
+takes the followers near it and everyone safe behind a door that held. The final card counts them.
+
+**Seeing it all.** From the free camera, or zoomed out, every zombie also shows as a red dot (brighter
+when hunting). Ground supplies (ammunition crates, first-aid kits) have their own light columns, and
+health comes back a little by itself but only up to 60, only after a quiet spell.
+
+Game options go on the link, all optional: `&seed=123` replays the same game (same zombies, supplies,
+survivors and waves), `&rescue=60` sets the clock in seconds, `&zombies=0` removes the zombies in the
+streets at the start (the number is groups; default 70), `&people=0` removes the survivors (default 10),
+`&waves=0` switches the waves off. `&debug=1` puts the scene on `window.__city.debug` with levers for
+staging scenes (spawn zombies, call survivors, jump the clock, teleport).
 
 To make another city (or redo this one), run the extractor in Docker; it writes
 `public/cities/<id>.json` and prints what it found:
