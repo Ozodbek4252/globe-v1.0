@@ -1,6 +1,6 @@
-// The real Tashkent district as the tests see it: collision world (with trees and lamp posts) and an
+// A real city from public/cities as the tests see it: collision world (with trees and lamp posts) and an
 // independent "is this point inside a building?" check that does not use the game's own grids, so a
-// bug in those cannot hide itself. Built once and shared.
+// bug in those cannot hide itself. Each is built once and shared.
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -14,16 +14,20 @@ import { pointInFlatRing } from '../../src/sim/grid';
 export interface TestCity {
   city: CityData;
   colliders: Colliders;
-  /** The open ground nearest the TV tower. */
+  /** The open ground nearest the tallest tower, or the centre of the map. */
   spawn: [number, number];
   insideBuilding: (x: number, y: number) => boolean;
 }
 
-let cached: TestCity | null = null;
+const cache = new Map<string, TestCity>();
 
-export function loadTashkent(): TestCity {
+export const loadTashkent = (): TestCity => loadCityById('tashkent');
+
+/** Any city in public/cities, by id. */
+export function loadCityById(id: string): TestCity {
+  const cached = cache.get(id);
   if (cached) return cached;
-  const city = JSON.parse(readFileSync(resolve('public/cities/tashkent.json'), 'utf8')) as CityData;
+  const city = JSON.parse(readFileSync(resolve(`public/cities/${id}.json`), 'utf8')) as CityData;
   const grid = buildOccupancy(city, 2);
   const lamps = placeLamps(city, grid);
   const trees = placeTrees(city, grid);
@@ -62,6 +66,7 @@ export function loadTashkent(): TestCity {
 
   const tower = city.towers.find((t) => t.height > 100);
   const spawn = findSpawn(colliders, tower ? [tower.x, tower.y] : [0, 0], 200, 5);
-  cached = { city, colliders, spawn, insideBuilding };
-  return cached;
+  const loaded: TestCity = { city, colliders, spawn, insideBuilding };
+  cache.set(id, loaded);
+  return loaded;
 }

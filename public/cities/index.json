@@ -1,0 +1,82 @@
+[
+  {
+    "id": "tashkent",
+    "name": "Tashkent",
+    "country": "Uzbekistan",
+    "lat": 41.3457,
+    "lon": 69.2848,
+    "density": 7700,
+    "kind": "city",
+    "blurb": "The TV Tower district: Soviet apartment blocks, canals, wide avenues and parks."
+  },
+  {
+    "id": "paris",
+    "name": "Paris",
+    "country": "France",
+    "lat": 48.8584,
+    "lon": 2.2945,
+    "density": 21000,
+    "kind": "city",
+    "blurb": "Around the Eiffel Tower and the Seine: tight streets between tall stone blocks."
+  },
+  {
+    "id": "tokyo",
+    "name": "Tokyo",
+    "country": "Japan",
+    "lat": 35.6586,
+    "lon": 139.7454,
+    "density": 14000,
+    "kind": "city",
+    "blurb": "Tokyo Tower and Shiba: a dense mesh of small streets, houses and offices."
+  },
+  {
+    "id": "newyork",
+    "name": "New York",
+    "country": "United States",
+    "lat": 40.758,
+    "lon": -73.9855,
+    "density": 28000,
+    "kind": "city",
+    "blurb": "Midtown Manhattan: a rigid street grid under skyscrapers."
+  },
+  {
+    "id": "cairo",
+    "name": "Cairo",
+    "country": "Egypt",
+    "lat": 30.0459,
+    "lon": 31.2243,
+    "density": 19000,
+    "kind": "city",
+    "blurb": "Downtown, near Tahrir Square and the Nile: crowded and thinly mapped."
+  },
+  {
+    "id": "london",
+    "name": "London",
+    "country": "United Kingdom",
+    "lat": 51.5055,
+    "lon": -0.0754,
+    "density": 9500,
+    "kind": "city",
+    "blurb": "Tower Bridge and the Thames: old lanes, new glass, and a river that splits the map."
+  },
+  {
+    "id": "sydney",
+    "name": "Sydney",
+    "country": "Australia",
+    "lat": -33.8568,
+    "lon": 151.2153,
+    "density": 6500,
+    "kind": "city",
+    "blurb": "Circular Quay and the Opera House: a harbour edge, with the city piled up behind it."
+  },
+  {
+    "id": "oia",
+    "name": "Oia",
+    "country": "Greece",
+    "lat": 36.4618,
+    "lon": 25.3753,
+    "density": 1500,
+    "kind": "village",
+    "blurb": "A cliff-top village on Santorini: white houses, one long path, nowhere to run."
+  }
+]

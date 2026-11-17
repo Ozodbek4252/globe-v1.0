@@ -1,5 +1,8 @@
 import type { LonLat } from './geo';
 
+/** Local time runs about an hour ahead of UTC for every 15 degrees east (Tashkent, at 69 E, is UTC+5). */
+export const utcOffsetHours = (longitude: number): number => Math.round(longitude / 15);
+
 const J2000_NOON_UTC = Date.UTC(2000, 0, 1, 12);
 const MS_PER_DAY = 864e5;
 

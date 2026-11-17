@@ -35,6 +35,16 @@ export interface ViewInfo {
   zoom: number;
 }
 
+/** A place worth a pin on the globe (the globe does not know what it is for). */
+export interface GlobeMarker {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  /** Drawn as a cross, and its night lights go dark. */
+  fallen: boolean;
+}
+
 export interface GlobeOptions {
   /** Loaded data. The globe never mutates it apart from attaching 1:50m borders. */
   world: World;
@@ -67,6 +77,15 @@ export interface GlobeApi {
   zoomBy(factor: number): void;
   /** Clear the picks and fly back to the starting view. */
   resetView(): void;
+
+  /** The pins on the globe, replacing the last set. A click on one fires `onMarkerClick`. */
+  setMarkers(markers: readonly GlobeMarker[]): void;
+  /** Ring this marker (null for none), so that it is easy to find. */
+  setChosenMarker(id: string | null): void;
+  /** Fly there, zooming in to at least `zoom`. */
+  flyToPoint(lat: number, lon: number, zoom?: number): void;
+  /** The id of the marker that was clicked. */
+  onMarkerClick(listener: (id: string) => void): Unsubscribe;
 
   /** The country under the pointer, or null. Fires on every mouse move over the globe. */
   onHover(listener: (hover: HoverInfo | null) => void): Unsubscribe;

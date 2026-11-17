@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue';
 import { useGlobe } from './composables/useGlobe';
-import { fmtLatLon } from './lib/format';
+import { usePlay } from './composables/usePlay';
+import { fmtClock, fmtLatLon } from './lib/format';
+import { cityHash, parseCityHash } from './map/playable';
 import { countryNames } from './map/search';
 import CityView from './ui/CityView.vue';
 import CountryCard from './ui/CountryCard.vue';
@@ -12,10 +14,12 @@ import LayerToggles from './ui/LayerToggles.vue';
 import MapLegend from './ui/MapLegend.vue';
 import ModeDropdown from './ui/ModeDropdown.vue';
 import PicksList from './ui/PicksList.vue';
+import PlayCard from './ui/PlayCard.vue';
 import ZoomControls from './ui/ZoomControls.vue';
 
 const host = useTemplateRef<HTMLElement>('host');
 const g = useGlobe(host);
+const play = usePlay();
 
 const names = computed(() => (g.world.value ? countryNames(g.world.value.countries) : []));
 
@@ -24,26 +28,52 @@ const coords = computed(
     `CENTER ${fmtLatLon(g.view.value.lat, g.view.value.lon)} · ${g.view.value.zoom.toFixed(1)}×`,
 );
 
-// The 3D city covers the whole window. #city in the address opens it directly.
-const cityOpen = ref(false);
-const enterButton = useTemplateRef<HTMLButtonElement>('enterButton');
+// The places you can play are pins on the globe (and a list), and what has happened in each shows on
+// both: a place you died in has fallen, and its lights go out.
+watch(play.markers, (markers) => g.setMarkers(markers), { immediate: true });
+watch(play.chosenId, (id) => g.setChosenMarker(id), { immediate: true });
+
+/** Open a place's card; from the list or a pin, the globe turns to show it. */
+function choose(id: string | null): void {
+  play.choose(id);
+  const place = play.chosen.value;
+  if (place) g.flyToPoint(place.lat, place.lon, 4);
+}
+const stopPinClicks = g.onMarkerClick(choose);
+onBeforeUnmount(stopPinClicks);
+
+const playCard = useTemplateRef<{ focus: () => void }>('playCard');
+
+/** What the list says under a place's name: where it is, and how it went. */
+function remark(id: string, country: string): string {
+  const outcome = play.outcomes.value[id];
+  if (!outcome) return country;
+  return `${country} · best ${fmtClock(outcome.best)}${outcome.fallen ? ' · fallen' : ''}`;
+}
+
+// The 3D city covers the whole window. `#city=<id>` in the address opens it directly (`#city` alone
+// is Tashkent, the first place there was).
+const cityId = ref<string | null>(null);
+const cityPlace = computed(() => play.places.value.find((p) => p.id === cityId.value) ?? null);
 const setHash = (hash: string): void =>
   history.replaceState(null, '', location.pathname + location.search + hash);
 
-function openCity(): void {
-  cityOpen.value = true;
-  setHash('#city');
+function openCity(id: string): void {
+  // playing a fallen place again lights it up: the lights come on when you try again
+  if (play.outcomes.value[id]?.fallen) play.reclaim(id);
+  cityId.value = id;
+  setHash(cityHash(id));
 }
 async function closeCity(): Promise<void> {
-  cityOpen.value = false;
+  cityId.value = null;
   setHash('');
   await nextTick();
-  enterButton.value?.focus();
+  playCard.value?.focus();
 }
 const syncFromHash = (): void => {
-  cityOpen.value = location.hash === '#city';
+  cityId.value = parseCityHash(location.hash);
 };
-watch(cityOpen, (open) => g.setPaused(open), { immediate: true });
+watch(cityId, (id) => g.setPaused(id !== null), { immediate: true });
 onMounted(() => {
   syncFromHash();
   window.addEventListener('hashchange', syncFromHash);
@@ -76,10 +106,28 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', syncFromHash));
       />
       <div>
         <p class="label lbl-modes">Play</p>
-        <button id="enter-city" ref="enterButton" class="enter" type="button" @click="openCity">
-          <span>Enter Tashkent</span>
-          <small>3D city from real map data · preview</small>
-        </button>
+        <ul class="places" aria-label="Places to play">
+          <li v-for="p in play.places.value" :key="p.id">
+            <button
+              type="button"
+              class="place"
+              :class="{
+                on: p.id === play.chosenId.value,
+                fallen: play.outcomes.value[p.id]?.fallen,
+              }"
+              :aria-pressed="p.id === play.chosenId.value"
+              :data-place="p.id"
+              @click="choose(p.id)"
+            >
+              <span>{{ p.name }}</span>
+              <small>{{ remark(p.id, p.country) }}</small>
+            </button>
+          </li>
+        </ul>
+        <p v-if="play.loadError.value" class="places-error" role="alert">
+          The list of places could not be loaded.
+        </p>
+        <p v-else class="places-hint">Pick one here, or click its pin on the globe.</p>
       </div>
       <div class="foot">
         Data: Natural Earth 1:110m, 1:50m when zoomed in (country figures are 2019 estimates). Night
@@ -92,11 +140,26 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', syncFromHash));
       <DayNightClock :active="g.modeId.value === 'daynight'" />
       <ZoomControls @zoom-in="g.zoomIn" @zoom-out="g.zoomOut" @reset="g.resetView" />
       <CountryCard :info="g.card.value" @close="g.closeCard" />
+      <PlayCard
+        ref="playCard"
+        :place="play.chosen.value"
+        :outcome="play.chosen.value ? play.outcomes.value[play.chosen.value.id] : undefined"
+        @play="play.chosen.value && openCity(play.chosen.value.id)"
+        @close="play.choose(null)"
+      />
       <p v-if="g.loadError.value" class="load-error" role="alert">{{ g.loadError.value }}</p>
     </main>
   </div>
   <HoverTip :tip="g.tip.value" />
-  <CityView v-if="cityOpen" city-id="tashkent" title="Tashkent" @close="closeCity" />
+  <CityView
+    v-if="cityId && play.loaded.value"
+    :key="cityId"
+    :city-id="cityId"
+    :title="cityPlace?.name ?? cityId"
+    :density="cityPlace?.density"
+    @close="closeCity"
+    @over="(seconds) => play.died(cityId as string, seconds)"
+  />
 </template>
 
 <style>
@@ -149,6 +212,57 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', syncFromHash));
 }
 .enter:focus-visible {
   outline: 2px solid var(--accent);
+}
+.places {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.place {
+  width: 100%;
+  display: grid;
+  gap: 1px;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font: 500 14px var(--f-body);
+}
+.place small {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.place:hover {
+  border-color: #3a4a6a;
+}
+.place.on {
+  border-color: rgba(240, 181, 74, 0.7);
+  background: rgba(240, 181, 74, 0.09);
+}
+.place.fallen span {
+  color: #ff8b7d;
+}
+.place:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.places-hint,
+.places-error {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--faint);
+}
+.places-error {
+  color: #ff8b7d;
 }
 .load-error {
   position: absolute;

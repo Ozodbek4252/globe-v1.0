@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sunPosition } from '../src/lib/sun';
+import { sunPosition, utcOffsetHours } from '../src/lib/sun';
 
 describe('sunPosition', () => {
   // Golden values: the output of the original function in the first single-file index.html
@@ -63,5 +63,16 @@ describe('sunPosition', () => {
   it('accepts a Date or a millisecond timestamp', () => {
     const iso = '2024-06-20T20:51:00Z';
     expect(sunPosition(Date.parse(iso))).toEqual(sunPosition(new Date(iso)));
+  });
+});
+
+describe('utcOffsetHours', () => {
+  it('is one hour per 15 degrees east, rounded', () => {
+    expect(utcOffsetHours(69.28)).toBe(5); // Tashkent
+    expect(utcOffsetHours(2.29)).toBe(0); // Paris
+    expect(utcOffsetHours(139.75)).toBe(9); // Tokyo
+    expect(utcOffsetHours(-73.99)).toBe(-5); // New York
+    expect(utcOffsetHours(151.2)).toBe(10); // Sydney
+    expect(utcOffsetHours(-180)).toBe(-12);
   });
 });

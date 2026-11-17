@@ -30,6 +30,7 @@ import {
   type Texture,
 } from 'three';
 import { createEmitter, type Unsubscribe } from '../lib/emitter';
+import { utcOffsetHours } from '../lib/sun';
 import { buildColliders, findSpawn } from '../sim/colliders';
 import {
   createGame,
@@ -99,8 +100,7 @@ import { TREE_STRIDE, placeTrees, type TreeSet } from './trees';
 import type { CityData } from './types';
 
 const FOV = 42;
-/** Tashkent is UTC+5. The scene's clock is local time on a fixed autumn day, so the sun is repeatable. */
-const UTC_OFFSET_HOURS = 5;
+/** The scene's clock is local time on a fixed autumn day, so the sun is repeatable. */
 const REFERENCE_DAY = Date.UTC(2026, 8, 22);
 
 export interface CityStats {
@@ -755,7 +755,7 @@ export async function createCityScene(
   const skyDirection = new Vector3();
 
   function applyTime(): void {
-    const date = REFERENCE_DAY + (hour - UTC_OFFSET_HOURS) * 3_600_000;
+    const date = REFERENCE_DAY + (hour - utcOffsetHours(data.center[0])) * 3_600_000;
     const angles = localSun(date, data.center[0], data.center[1]);
     elevation = angles.elevation;
     const palette = skyPalette(angles.elevation);

@@ -13,6 +13,7 @@ import { DEFAULT_ROT } from '../globe/projection';
 import {
   DEFAULT_LAYERS,
   type GlobeApi,
+  type GlobeMarker,
   type HoverInfo,
   type LayerName,
   type Layers,
@@ -68,6 +69,10 @@ export function useGlobe(host: Readonly<ShallowRef<HTMLElement | null>>) {
   let globe: GlobeApi | null = null;
   let disposed = false;
   let paused = false; // remembered, because the globe may not exist yet when something covers it
+  // likewise the pins: they may be set before the globe has loaded
+  let markers: readonly GlobeMarker[] = [];
+  let chosenMarker: string | null = null;
+  const markerListeners = new Set<(id: string) => void>();
   const unsubscribe: Unsubscribe[] = [];
 
   writeStored(MODE_KEY, modeId.value);
@@ -84,7 +89,10 @@ export function useGlobe(host: Readonly<ShallowRef<HTMLElement | null>>) {
     world.value = loaded;
     globe = createGlobe(host.value, { world: loaded, mode: modeId.value, layers: { ...layers } });
     if (paused) globe.setPaused(true);
+    globe.setMarkers(markers);
+    globe.setChosenMarker(chosenMarker);
     unsubscribe.push(
+      globe.onMarkerClick((id) => markerListeners.forEach((listener) => listener(id))),
       globe.onHover((h) => (hover.value = h)),
       globe.onPicksChange((s) => {
         picks.value = s.picks;
@@ -177,5 +185,20 @@ export function useGlobe(host: Readonly<ShallowRef<HTMLElement | null>>) {
     zoomIn: (): void => globe?.zoomBy(1.4),
     zoomOut: (): void => globe?.zoomBy(1 / 1.4),
     resetView: (): void => globe?.resetView(),
+    setMarkers(next: readonly GlobeMarker[]): void {
+      markers = next;
+      globe?.setMarkers(next);
+    },
+    setChosenMarker(id: string | null): void {
+      chosenMarker = id;
+      globe?.setChosenMarker(id);
+    },
+    flyToPoint: (lat: number, lon: number, zoom?: number): void =>
+      globe?.flyToPoint(lat, lon, zoom),
+    /** Called with the id of a pin when it is clicked. Returns a function that stops listening. */
+    onMarkerClick(listener: (id: string) => void): () => void {
+      markerListeners.add(listener);
+      return () => markerListeners.delete(listener);
+    },
   };
 }

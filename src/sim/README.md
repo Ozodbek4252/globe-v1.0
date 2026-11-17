@@ -103,7 +103,10 @@ without a sign.
 
 ## Ideas for later
 
-The world-scale outbreak (country by country, cities going dark on the globe) is not built. The city
-outbreak above is its building block: when a city has fallen, the globe can dim its lights. It belongs
-here too, keyed by country code (`ADM0_A3`), working on numbers per country and city and never on
-geometry, and its output can become a map mode in `map/modes.ts` with no change to `src/globe`.
+A world-scale outbreak (country by country, the outbreak spreading between places on its own) is not
+built. Today a place falls when the survivor dies in it, which is recorded per browser (see
+`src/map/playable.ts`) and shown as darkness over its lights on the globe. The city outbreak above is the
+building block for more: how far a place has fallen could come from its share of people turned. A
+world-scale model belongs here too, keyed by country code (`ADM0_A3`), working on numbers per country
+and city and never on geometry, and its output can become a map mode in `map/modes.ts` with no change to
+`src/globe`.

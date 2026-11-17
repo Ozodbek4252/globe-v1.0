@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { fmtArea, fmtBig, fmtDensity, fmtGdp, fmtLatLon, fmtTick, fmtUsd } from '../src/lib/format';
+import {
+  fmtArea,
+  fmtBig,
+  fmtClock,
+  fmtDensity,
+  fmtGdp,
+  fmtLatLon,
+  fmtTick,
+  fmtUsd,
+} from '../src/lib/format';
 
 describe('fmtBig', () => {
   it.each([
@@ -82,5 +91,21 @@ describe('fmtLatLon', () => {
   });
   it('treats zero as north and east, as the legacy readout did', () => {
     expect(fmtLatLon(0, 0)).toBe('0.0°N 0.0°E');
+  });
+});
+
+describe('fmtClock', () => {
+  it.each([
+    [0, '0:00'],
+    [7.9, '0:07'],
+    [59, '0:59'],
+    [60, '1:00'],
+    [247, '4:07'],
+    [3599, '59:59'],
+    [3600, '1:00:00'],
+    [3847, '1:04:07'],
+    [-5, '0:00'],
+  ])('%d s -> %s', (seconds, expected) => {
+    expect(fmtClock(seconds)).toBe(expected);
   });
 });

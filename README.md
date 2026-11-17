@@ -6,10 +6,12 @@ person, income group, live day and night), a NASA night-lights layer, search, an
 
 It is a Vite + TypeScript + Vue 3 app. The globe is drawn with Canvas 2D (d3-geo) plus a WebGL2
 fragment shader for the night lights. It is the base for an outbreak survival game, and the first
-playable piece is in: press **Enter Tashkent** to drop from the globe into a 3D city built from real
-OpenStreetMap buildings and full of its people, where an outbreak has just begun. You steer one
-survivor with a pistol and have to stay alive as long as you can: there is no rescue and no cure (see
-[The 3D city](#the-3d-city) and [The game](#the-game)). The rules live in [src/sim](src/sim/README.md).
+playable piece is in: click a gold pin on the globe (or pick a place in the sidebar) and press **Play
+here** to drop into a 3D city built from real OpenStreetMap buildings and full of its people, where an
+outbreak has just begun. There are eight places, from Manhattan to a village on Santorini. You steer one
+survivor with a pistol and have to stay alive as long as you can: there is no rescue and no cure. When
+you die the place has fallen, and its lights go out on the globe (see [The world](#the-world), [The 3D
+city](#the-3d-city) and [The game](#the-game)). The rules live in [src/sim](src/sim/README.md).
 
 ## Run it
 
@@ -66,25 +68,29 @@ If you already have Node, the plain commands work too: `npm install`, `npm run d
 public/
   img/            NASA Black Marble night-lights textures (13500x6750 and 8192x4096)
   data/           countries-110m, rivers, lakes, cities, countries-50m (JSON)
-  cities/         3D city maps from OpenStreetMap (tashkent.json), with their licence notice
+  cities/         the places to play: index.json (the list) and one OpenStreetMap map each
+                  (tashkent, paris, tokyo, newyork, cairo, london, sydney, oia), with their licence notice
 src/
-  main.ts  App.vue            layout: sidebar plus globe stage
+  main.ts  App.vue            layout: sidebar plus globe stage; opens the city
   composables/useGlobe.ts     the one place Vue meets the globe: small UI state, forwards actions
+  composables/usePlay.ts      the places to play and what happened in each (kept in localStorage)
   globe/                      rendering and input, plain TypeScript, no Vue
     createGlobe.ts            canvases, render loop, the GlobeApi
     projection.ts  state.ts   view maths, flight, inertia, spin
     draw2d.ts  labels.ts      countries, borders, grid, selection, shading, labels
     lightsGL.ts  shaders/     WebGL2 night lights (GLSL kept as .glsl files)
+    markers.ts                the pins, their hit test, and the darkness over fallen places
     hitTest.ts  input.ts      picking, drag, pinch, wheel, keyboard
   map/                        what the map shows
     modes.ts                  the nine modes: colours, scales, legends, tooltips
     data.ts                   loaders, 110m/50m switching, bounding circles
+    playable.ts               the list of places, and the record of what became of each (pure, tested)
     climate.ts  info.ts  search.ts  types.ts
   city/                       the 3D city (Three.js), plain TypeScript, no Vue
     osm.ts  types.ts          OpenStreetMap to the compact CityData format (pure, tested)
     geometry.ts  palette.ts   footprints to meshes: walls, roofs, roads, parks, water, towers
     trees.ts  lamps.ts        deterministic trees and street lamps; occupancy.ts for placement
-    sunlight.ts  sky.ts       the real sun at Tashkent, sky colours, sky dome
+    sunlight.ts  sky.ts       the real sun over the place (its latitude, longitude and time zone), sky colours
     textures.ts               facades with lit windows, road markings, ground grain
     cameraRig.ts  followYaw.ts  the camera maths, and which side the follow camera starts on
     character.ts  cutaway.ts  the survivor's low-poly body and walk cycle; see-through occluders
@@ -108,31 +114,46 @@ compose.yaml                  Docker tasks: dev, tools
 Imports only point one way: `ui -> composables -> globe | city -> map -> lib`. `globe`, `city`, `map`
 and `lib` never import Vue, and `city` and `globe` do not import each other.
 
+## The world
+
+The places you can play are gold pins on the globe, and buttons in the sidebar. Click one (the globe
+turns to it) and its card shows how many people live there, the longest you have lasted, and **Play
+here**. Each place is a real district from OpenStreetMap, a square 1.2 to 2 km across: Tashkent around
+the TV Tower, Paris around the Eiffel Tower, Tokyo Tower and Shiba, Midtown Manhattan, downtown Cairo,
+London at Tower Bridge, Sydney's Circular Quay, and Oia, a village on Santorini. A crowd is sized from
+each place's own density of people (a rough public figure, in `public/cities/index.json`).
+
+**A place falls when you die in it.** Its pin turns into a red cross, and with the **Lights** layer on, a
+patch of darkness spreads over its glow on the globe. It stays dark, with the longest you lasted, until
+you **Try again** there (which lights it up for the new game). What happened is kept in this browser
+(`localStorage`).
+
 ## The 3D city
 
-**Enter Tashkent** in the sidebar (or open `/#city`) loads a 2 km by 2 km district around the Tashkent
-TV Tower: about 3,800 real building footprints, roads, canals, parks and 500 mapped trees, plus
-generated trees and street lamps. Three.js and the city code download only when you press the button,
-so the globe page stays light.
+A place loads as a 3D district: its real building footprints, roads, water, parks and mapped trees, plus
+generated trees and street lamps (Tashkent has about 3,800 buildings; a village a few hundred). Three.js
+and the city code download only when you press **Play here**, so the globe page stays light. The
+address holds the place: `/#city=paris` opens Paris directly (a bare `#city` is Tashkent, as it always
+was).
 
-- **The survivor:** you start on the street beside the TV tower and walk with `W A S D` (up the
-  screen is forward). `Shift` runs until you are out of breath; the stamina bar refills after a pause.
+- **The survivor:** you start on the street beside the tallest tower (or the middle of the map) and
+  walk with `W A S D` (up the screen is forward). `Shift` runs until you are out of breath; the stamina bar refills after a pause.
   Walls, trees, lamp posts and water are solid; you slide along them, and bridges let you cross canals.
   Buildings and trees that stand between the camera and the survivor dissolve so you never lose them.
   At night a flashlight comes on by itself (`L` to override).
 - **Camera:** it follows the survivor from the side with the clearest view. `Q E` or right-drag turn
   it, the wheel zooms, `H` recentres. `V` switches to a free camera (`W A S D` or drag pan it, `R F`
-  tilt, `T` jumps to the TV tower), and `V` again returns to the survivor.
+  tilt, `T` jumps to the landmark), and `V` again returns to the survivor.
 - **Other keys:** `P` or `Esc` pauses (a menu offers resume, start again, back to the globe), `F2`
   shows a performance panel. The game also pauses by itself when the window loses focus.
-- **Time of day:** a slider sets the real sun position over Tashkent (a fixed autumn date). Windows and
+- **Time of day:** a slider sets the real sun position over the place (a fixed autumn date). Windows and
   street lamps light up as it gets dark.
-- **Deep links:** `/?hour=17.4&view=x,y,yaw,pitch,distance&player=x,y&camera=free#city` opens at a
+- **Deep links:** `/?hour=17.4&view=x,y,yaw,pitch,distance&player=x,y&camera=free#city=paris` opens at a
   given time, camera placement and survivor position (metres east and north of the centre, degrees,
   metres). All parts are optional; `view` alone starts in the free camera. Game options are in
   [The game](#the-game).
 
-- **Heights:** OpenStreetMap tags a height for only about 5% of Tashkent's buildings, so the rest are
+- **Heights:** OpenStreetMap tags a height for only about 5% of Tashkent's buildings (more elsewhere), so the rest are
   estimated from the kind of building and its footprint. The estimate is deterministic.
 
 ## The game
@@ -140,8 +161,8 @@ so the globe page stays light.
 Stay alive as long as you can. There is no rescue and no cure: the outbreak is the whole story, and
 the clock at the top of the screen counts how long you have lasted.
 
-**The city is full of people.** About 30,000 of them, worked out from the real density of Tashkent
-(7,700 per square kilometre) and shared between the real buildings by size, height and kind: a tall
+**The city is full of people.** Tens of thousands of them (about 30,000 in Tashkent), worked out from the real density of the place
+(7,700 per square kilometre in Tashkent) and shared between the real buildings by size, height and kind: a tall
 block of flats holds hundreds, a house a handful, a shed nobody. Nearly everyone is indoors; a few
 percent are out in the street as individuals (drawn as dots from high up) who stroll about, run from
 zombies and gunfire, and make for the nearest door.
@@ -198,11 +219,11 @@ spell.
 
 Game options go on the link, all optional: `&seed=123` replays the same game (same outbreak, zombies
 and supplies), `&patients=3` is how many buildings the outbreak begins in (0 for a calm city),
-`&density=7700` is people per square kilometre, `&zombies=0` adds groups of zombies in the streets at
+`&density=7700` is people per square kilometre (default: the place's own), `&zombies=0` adds groups of zombies in the streets at
 the start. `&debug=1` puts the scene on `window.__city.debug` with levers for staging scenes (spawn
 zombies, put a crowd in the street, start an outbreak next to you, jump the clock, teleport).
 
-To make another city (or redo this one), run the extractor in Docker; it writes
+To make another place (or redo one), run the extractor in Docker; it writes
 `public/cities/<id>.json` and prints what it found:
 
 ```bash
@@ -211,7 +232,10 @@ docker compose run --rm --entrypoint node tools scripts/fetch-city.mjs \
 ```
 
 It queries the public Overpass servers, which are sometimes busy; the script retries across servers.
-The map data is licensed under the ODbL, see [public/cities/README.md](public/cities/README.md).
+Then add the place to `public/cities/index.json` (name, country, where, people per km², a line for its
+card) and to the table in `public/cities/README.md`; the tests check that the list, the map files and the
+notice agree, and play a minute of the game on every map. The map data is licensed under the ODbL, see
+[public/cities/README.md](public/cities/README.md).
 
 ### The globe API
 
@@ -222,6 +246,7 @@ setMode(id)           setLayer('labels' | 'grid' | 'cities' | 'lights' | 'spin',
 selectCountry(code)   togglePick(code)    flyToCountry(code)
 closeCard()           clearPicks()        zoomBy(factor)       resetView()
 onHover(cb)           onPicksChange(cb)   onViewChange(cb)     onLightsStatus(cb)
+setMarkers(pins)      setChosenMarker(id) flyToPoint(lat, lon)  onMarkerClick(cb)
 destroy()
 ```
 

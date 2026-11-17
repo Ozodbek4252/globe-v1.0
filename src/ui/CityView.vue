@@ -13,8 +13,8 @@ import type {
 import GameHud from './GameHud.vue';
 import RadarScope from './RadarScope.vue';
 
-const props = defineProps<{ cityId: string; title: string }>();
-const emit = defineEmits<{ close: [] }>();
+const props = defineProps<{ cityId: string; title: string; density?: number }>();
+const emit = defineEmits<{ close: []; over: [seconds: number] }>();
 
 const host = useTemplateRef<HTMLElement>('host');
 const root = useTemplateRef<HTMLElement>('root');
@@ -52,7 +52,7 @@ let stopRadar: (() => void) | null = null;
  *   &seed=123                         replay the same game (same outbreak, zombies and supplies)
  *   &zombies=0                        groups of zombies in the streets at the start (default 0)
  *   &patients=3                       where the outbreak starts: people turned in this many buildings (0: a calm city)
- *   &density=7700                     people per square kilometre (default: Tashkent's)
+ *   &density=7700                     people per square kilometre (default: the place's own)
  */
 function linkOptions(): {
   hour?: number;
@@ -136,7 +136,7 @@ onMounted(async () => {
       view: link.view,
       camera: link.camera,
       player: link.player,
-      game: link.game,
+      game: { ...link.game, density: link.game?.density ?? props.density },
       debug: link.debug,
       onProgress: (fraction, label) => {
         progress.value = fraction;
@@ -155,6 +155,7 @@ onMounted(async () => {
     stopPlayer = created.onPlayer((s) => (player.value = s));
     stopGame = created.onGame((n) => {
       hud.value?.push(n);
+      if (n.type === 'over') emit('over', n.time);
     });
     stopRadar = created.onRadar((f) => {
       radar.value = f;
@@ -318,7 +319,7 @@ onBeforeUnmount(() => {
         <template v-else>
           <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or drag: move camera</li>
           <li><kbd>Q</kbd><kbd>E</kbd> or right-drag: turn &nbsp; <kbd>R</kbd><kbd>F</kbd> tilt</li>
-          <li><kbd>T</kbd> TV tower &nbsp; <kbd>V</kbd> back to survivor</li>
+          <li><kbd>T</kbd> landmark &nbsp; <kbd>V</kbd> back to survivor</li>
           <li><kbd>H</kbd> home &nbsp; <kbd>P</kbd> <kbd>Esc</kbd> pause</li>
         </template>
       </ul>

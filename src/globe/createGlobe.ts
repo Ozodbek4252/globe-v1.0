@@ -10,11 +10,13 @@ import { countryAt, type HitContext } from './hitTest';
 import { attachInput } from './input';
 import { CANVAS_FONT_FACES } from './labels';
 import { createLightsGL } from './lightsGL';
+import { drawDarkness, drawFallenMarks, drawMarkers, markerAt } from './markers';
 import { baseScaleFor, createProjection, DEFAULT_ROT, visibleCountries } from './projection';
 import { createState, flyTo, setZoom, stepMotion } from './state';
 import {
   DEFAULT_LAYERS,
   type GlobeApi,
+  type GlobeMarker,
   type GlobeOptions,
   type HoverInfo,
   type Layers,
@@ -25,10 +27,11 @@ import {
 /**
  * Create the interactive globe inside `host` and return its API.
  *
- * `host` must be a sized element (it is observed for size changes). The globe adds two
- * canvases to it, one for the map and one for the night lights, and sets `isolation: isolate`
- * on it so the lights blend with the map and nothing else. A static host is made `position:
- * relative` so the lights canvas can overlay the map; a host that is already positioned is left alone.
+ * `host` must be a sized element (it is observed for size changes). The globe adds three
+ * canvases to it, one for the map, one for the night lights and, above them, one for the darkness
+ * over fallen places, and sets `isolation: isolate` on it so the lights blend with the map and
+ * nothing else. A static host is made `position: relative` so the lights canvas can overlay the map;
+ * a host that is already positioned is left alone.
  *
  * This module is plain TypeScript and knows nothing about Vue.
  */
@@ -69,11 +72,26 @@ export function createGlobe(host: HTMLElement, options: GlobeOptions): GlobeApi 
     outline: 'none',
   } satisfies Partial<CSSStyleDeclaration>);
 
-  host.append(lightsCanvas, canvas);
+  // above the lights: a soft black patch over each fallen place, so its lights go out
+  const darkCanvas = document.createElement('canvas');
+  darkCanvas.setAttribute('aria-hidden', 'true');
+  Object.assign(darkCanvas.style, {
+    position: 'absolute',
+    inset: '0',
+    width: '100%',
+    height: '100%',
+    pointerEvents: 'none',
+    zIndex: '2',
+  } satisfies Partial<CSSStyleDeclaration>);
+
+  host.append(lightsCanvas, canvas, darkCanvas);
 
   const context = canvas.getContext('2d');
   if (!context) throw new Error('This browser does not support 2D canvas');
   const ctx: CanvasRenderingContext2D = context;
+  const darkContext = darkCanvas.getContext('2d');
+  if (!darkContext) throw new Error('This browser does not support 2D canvas');
+  const darkCtx: CanvasRenderingContext2D = darkContext;
 
   // ---------- state ----------
   const state = createState();
@@ -88,7 +106,11 @@ export function createGlobe(host: HTMLElement, options: GlobeOptions): GlobeApi 
   let visible: readonly Country[] = world.countries;
   let detailed = false;
 
+  let markers: readonly GlobeMarker[] = [];
+  let chosenMarker: string | null = null;
+
   const hoverEvents = createEmitter<HoverInfo | null>();
+  const markerEvents = createEmitter<string>();
   const picksEvents = createEmitter<PicksState>();
   const viewEvents = createEmitter<ViewInfo>();
   const lightsStatusEvents = createEmitter<string>();
@@ -112,8 +134,8 @@ export function createGlobe(host: HTMLElement, options: GlobeOptions): GlobeApi 
     state.width = r.width;
     state.height = r.height;
     state.dpr = Math.min(window.devicePixelRatio || 1, 2);
-    canvas.width = Math.round(r.width * state.dpr);
-    canvas.height = Math.round(r.height * state.dpr);
+    canvas.width = darkCanvas.width = Math.round(r.width * state.dpr);
+    canvas.height = darkCanvas.height = Math.round(r.height * state.dpr);
     state.baseScale = baseScaleFor(r.width, r.height);
     state.dirty = true;
   }
@@ -153,6 +175,8 @@ export function createGlobe(host: HTMLElement, options: GlobeOptions): GlobeApi 
       selected,
       sun,
     });
+    ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+    drawMarkers(ctx, proj, rot, markers, zoom, chosenMarker);
 
     // WebGL night lights go on top of the 2D map; in Day & night they show on the night side only.
     lights?.render({
@@ -163,6 +187,15 @@ export function createGlobe(host: HTMLElement, options: GlobeOptions): GlobeApi 
       scale: scale * state.dpr,
       rot,
     });
+
+    // and over the lights, the dark patches where places have fallen (only while the lights are on)
+    darkCtx.setTransform(1, 0, 0, 1, 0, 0);
+    darkCtx.clearRect(0, 0, darkCanvas.width, darkCanvas.height);
+    if (layers.lights && markers.some((m) => m.fallen)) {
+      darkCtx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+      drawDarkness(darkCtx, proj, rot, markers, scale);
+      drawFallenMarks(darkCtx, proj, rot, markers);
+    }
   }
 
   function emitView(): void {
@@ -259,6 +292,17 @@ export function createGlobe(host: HTMLElement, options: GlobeOptions): GlobeApi 
   // ---------- input ----------
   const detachInput = attachInput(canvas, state, {
     hover(x, y, event) {
+      // over a pin, the pointer says "click me", and the country under it is left out of it
+      const overPin = markerAt(proj, state.rot, markers, x, y) !== null;
+      canvas.style.cursor = overPin ? 'pointer' : 'grab';
+      if (overPin) {
+        if (hovered) {
+          hovered = null;
+          state.dirty = true;
+        }
+        hoverEvents.emit(null);
+        return;
+      }
       const country = countryAt(x, y, hitContext());
       if (country !== hovered) {
         hovered = country;
@@ -279,6 +323,11 @@ export function createGlobe(host: HTMLElement, options: GlobeOptions): GlobeApi 
       hoverEvents.emit(null);
     },
     click(x, y) {
+      const pin = markerAt(proj, state.rot, markers, x, y);
+      if (pin) {
+        markerEvents.emit(pin.id);
+        return;
+      }
       toggle(countryAt(x, y, hitContext()));
     },
     escape: clearPicks,
@@ -334,7 +383,20 @@ export function createGlobe(host: HTMLElement, options: GlobeOptions): GlobeApi 
       flyTo(state, [-DEFAULT_ROT[0], -DEFAULT_ROT[1]], 1, reduceMotion);
     },
 
+    setMarkers(next) {
+      markers = next;
+      state.dirty = true;
+    },
+    setChosenMarker(id) {
+      chosenMarker = id;
+      state.dirty = true;
+    },
+    flyToPoint(lat, lon, zoom = 5) {
+      flyTo(state, [lon, lat], Math.max(state.zoom, zoom), reduceMotion);
+    },
+
     onHover: hoverEvents.on,
+    onMarkerClick: markerEvents.on,
     onPicksChange: picksEvents.on,
     onViewChange: viewEvents.on,
     onLightsStatus: lightsStatusEvents.on,
@@ -346,11 +408,13 @@ export function createGlobe(host: HTMLElement, options: GlobeOptions): GlobeApi 
       detachInput();
       lights?.dispose();
       hoverEvents.clear();
+      markerEvents.clear();
       picksEvents.clear();
       viewEvents.clear();
       lightsStatusEvents.clear();
       canvas.remove();
       lightsCanvas.remove();
+      darkCanvas.remove();
     },
   };
 }

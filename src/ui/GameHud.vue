@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, useTemplateRef, watch } from 'vue';
 import type { GameNotice, PlayerStatus } from '../city/createCity';
+import { fmtClock } from '../lib/format';
 
 const props = defineProps<{ player: PlayerStatus | null }>();
 const emit = defineEmits<{ restart: []; close: []; resume: [] }>();
@@ -40,13 +41,7 @@ function later(fn: () => void, ms: number): void {
   timers.add(t);
 }
 
-/** Minutes and seconds, counting up: 4:07. Past an hour, 1:04:07. */
-const clock = (seconds: number): string => {
-  const total = Math.max(0, Math.floor(seconds));
-  const s = String(total % 60).padStart(2, '0');
-  const m = Math.floor(total / 60);
-  return m >= 60 ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}:${s}` : `${m}:${s}`;
-};
+const clock = fmtClock;
 const plural = (n: number, one: string, many = one + 's'): string => `${n} ${n === 1 ? one : many}`;
 const count = (n: number): string => n.toLocaleString('en-US');
 

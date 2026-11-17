@@ -41,6 +41,14 @@ export function fmtArea(km2: number): string {
   return '≈ ' + groupInt(Math.round(km2 / 1000) * 1000) + ' km²';
 }
 
+/** Minutes and seconds, counting up: 4:07. Past an hour, 1:04:07. */
+export function fmtClock(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const s = String(total % 60).padStart(2, '0');
+  const m = Math.floor(total / 60);
+  return m >= 60 ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}:${s}` : `${m}:${s}`;
+}
+
 /** 12.3°N 45.6°W */
 export function fmtLatLon(lat: number, lon: number): string {
   return (
