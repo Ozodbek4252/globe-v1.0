@@ -178,6 +178,8 @@ export interface HordeContext {
   reachable: Uint8Array;
   px: number;
   py: number;
+  /** How big the survivor is to walk into: a person by default, a car when they are driving one. */
+  playerRadius?: number;
   /** False once the survivor is down: zombies lose interest. */
   playerAlive: boolean;
   /**
@@ -862,7 +864,10 @@ function chase(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number): 
     return;
   }
   const d = Math.sqrt(d2);
-  if (d < ZOMBIE.attackStart && lineOfSight(ctx.world, h.x[i], h.y[i], ctx.px, ctx.py)) {
+  if (
+    d < ZOMBIE.attackStart + bulk(ctx) &&
+    lineOfSight(ctx.world, h.x[i], h.y[i], ctx.px, ctx.py)
+  ) {
     h.state[i] = ZState.ATTACK;
     h.phase[i] = 0;
     h.attackT[i] = 0;
@@ -920,10 +925,10 @@ function attack(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number):
   h.heading[i] += Math.abs(turn) <= most ? turn : Math.sign(turn) * most;
 
   h.attackT[i] += dt;
-  if (!targets && ctx.playerAlive && d < ZOMBIE.attackReach) h.engaged++;
+  if (!targets && ctx.playerAlive && d < ZOMBIE.attackReach + bulk(ctx)) h.engaged++;
   if (h.phase[i] === 0) {
     if (h.attackT[i] >= windup) {
-      const reach = targets ? ZOMBIE.attackReach + ZOMBIE.lunge : ZOMBIE.attackReach;
+      const reach = targets ? ZOMBIE.attackReach + ZOMBIE.lunge : ZOMBIE.attackReach + bulk(ctx);
       if (d <= reach && lineOfSight(ctx.world, h.x[i], h.y[i], aimX, aimY)) {
         if (targets) targets.damage[v] += blow;
         else if (ctx.playerAlive) {
@@ -949,13 +954,18 @@ function attack(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number):
   }
 }
 
+/** How much further out the survivor's edge is than a person's: nothing on foot, a car's body when driving. */
+function bulk(ctx: HordeContext): number {
+  return Math.max(0, (ctx.playerRadius ?? PLAYER.radius) - PLAYER.radius);
+}
+
 /** Keep zombies from stacking on each other (and on the survivor), wherever they are. */
 function separate(h: Horde, ctx: HordeContext, tick: number): void {
   const far2 = ZOMBIE.farRange * ZOMBIE.farRange;
   const g = h.grid;
   const minDist = ZOMBIE.radius * 1.75;
   const min2 = minDist * minDist;
-  const playerGap = ZOMBIE.radius + PLAYER.radius * 0.9;
+  const playerGap = ZOMBIE.radius + (ctx.playerRadius ?? PLAYER.radius) * 0.9;
   h.pushed.fill(0, 0, h.used);
   for (let i = 0; i < h.used; i++) {
     const c = g.cellOf[i];

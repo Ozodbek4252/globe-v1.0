@@ -58,7 +58,18 @@ import {
 import { createPointIndex, rebuildIndex, type PointIndex } from './spatial';
 import { createPlayer, speedOf, stepPlayer, PLAYER, type PlayerState } from './player';
 import { rayCircleHit, rayWallHit } from './raycast';
-import { validSpot, type GameWorld } from './world';
+import {
+  CAR,
+  carInReach,
+  carVelocity,
+  engineNoise,
+  parkCars,
+  stepCar,
+  stepOutSpot,
+  wrecked,
+  type Car,
+} from './vehicle';
+import { validSpot, type GameWorld, type WorldRoad } from './world';
 
 // These used to live here; they are re-exported so the rest of the code does not care.
 export { validSpot };
@@ -255,6 +266,14 @@ export type GameEvent =
   | { type: 'door'; place: number; fraction: number }
   /** The door gave way: the horde is in, and the shelter is lost. */
   | { type: 'breach'; place: number }
+  /** The car: got in, got out, hit something hard (`force` is the speed lost, m/s), ran dry, or was wrecked. */
+  | {
+      type: 'car';
+      what: 'enter' | 'exit' | 'crash' | 'fuel' | 'wrecked';
+      x: number;
+      y: number;
+      force: number;
+    }
   | { type: 'lost' };
 
 export interface GameInput {
@@ -293,6 +312,7 @@ export function createGameWorld(
   colliders: Colliders,
   start: readonly [number, number],
   buildings: readonly PlaceBuilding[] = [],
+  roads: readonly WorldRoad[] = [],
 ): GameWorld {
   const nav = buildNavGrid(colliders);
   const world: GameWorld = {
@@ -301,6 +321,7 @@ export function createGameWorld(
     reachable: reachableFrom(nav, start[0], start[1]),
     buildings,
     places: [],
+    roads,
   };
   world.places = choosePlaces(buildings, start, world);
   return world;
@@ -419,6 +440,11 @@ export interface GameState {
   breached: boolean[];
   /** Seconds since the last "door" event, so a beating does not flood the event queue. */
   doorEventTimer: number;
+  /** The cars about the city, and which one the survivor is in (-1 on foot). */
+  cars: Car[];
+  driving: number;
+  /** Seconds until the engine is next heard. */
+  engineTimer: number;
   stats: GameStats;
   events: GameEvent[];
   rng: Rng;
@@ -537,6 +563,9 @@ export function createGame(world: GameWorld, options: GameOptions): GameState {
     doors: world.places.map((p) => (p.kind === 'shelter' ? GAME.shelter.door : 0)),
     breached: world.places.map(() => false),
     doorEventTimer: 0,
+    cars: parkCars(world, rng),
+    driving: -1,
+    engineTimer: 0,
     stats: { kills: 0, shots: 0, hits: 0, damageTaken: 0, shoves: 0 },
     events: [],
     rng,
@@ -700,28 +729,36 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
     g.shoveCooldown = Math.max(0, g.shoveCooldown - dt);
 
     // Indoors there is no walking, aiming, shooting or shoving: only reloading, resting and leaving.
+    // At the wheel there is only driving (and getting out).
     const indoors = g.inside >= 0;
+    const driving = g.driving >= 0;
     const act: GameInput = indoors
       ? { ...NO_INPUT, reload: input.reload, interact: input.interact }
-      : input;
+      : driving
+        ? { ...NO_INPUT, moveX: input.moveX, moveY: input.moveY, interact: input.interact }
+        : input;
 
     // the survivor
     const p0 = g.player;
     let face: number | null = null;
-    if (act.aim && Math.hypot(act.aim[0] - p0.x, act.aim[1] - p0.y) > 0.6) {
+    if (!driving && act.aim && Math.hypot(act.aim[0] - p0.x, act.aim[1] - p0.y) > 0.6) {
       face = Math.atan2(act.aim[1] - p0.y, act.aim[0] - p0.x);
     }
-    const slow = Math.max(GAME.grabFloor, 1 - GAME.grabSlow * g.horde.engaged);
-    g.player = stepPlayer(
-      p0,
-      { moveX: act.moveX, moveY: act.moveY, sprint: act.sprint, face, slow },
-      colliders,
-      dt,
-    );
+    if (driving) {
+      drive(g, act, world, dt);
+    } else {
+      const slow = Math.max(GAME.grabFloor, 1 - GAME.grabSlow * g.horde.engaged);
+      g.player = stepPlayer(
+        p0,
+        { moveX: act.moveX, moveY: act.moveY, sprint: act.sprint, face, slow },
+        colliders,
+        dt,
+      );
+    }
     const p = g.player;
 
     // footsteps: sprinting is loud, walking is quiet, standing still is silent
-    if (speedOf(p) > 1.2) {
+    if (!driving && speedOf(p) > 1.2) {
       g.stepTimer -= dt;
       if (g.stepTimer <= 0) {
         const loud = p.sprinting;
@@ -732,7 +769,7 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
       }
     } else g.stepTimer = 0;
 
-    stepWeapon(g, act, face, colliders, dt);
+    if (!driving) stepWeapon(g, act, face, colliders, dt);
     if (act.shove) tryShove(g);
     if (act.interact) interact(g, world);
     if (!indoors) collectPickups(g);
@@ -782,6 +819,7 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
       reachable: world.reachable,
       px: g.player.x,
       py: g.player.y,
+      playerRadius: g.driving >= 0 ? CAR.radius : PLAYER.radius,
       playerAlive: playing,
       hidden: playing && g.inside >= 0,
       targets: g.targets,
@@ -818,7 +856,16 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
   }
 
   if (playing) {
-    if (damage > 0) hurt(g, damage, g.horde.lastHitX, g.horde.lastHitY);
+    if (damage > 0) {
+      // in a car, most of a blow lands on the car (while it is in one piece)
+      const car = g.driving >= 0 ? g.cars[g.driving] : null;
+      const shielded = car && !wrecked(car) ? damage * CAR.shield : 0;
+      if (car && shielded > 0) {
+        car.hp = Math.max(0, car.hp - shielded);
+        if (wrecked(car)) emit(g, { type: 'car', what: 'wrecked', x: car.x, y: car.y, force: 0 });
+      }
+      if (damage - shielded > 0) hurt(g, damage - shielded, g.horde.lastHitX, g.horde.lastHitY);
+    }
     if (g.health <= 0) {
       g.health = 0;
       g.status = 'lost';
@@ -1259,19 +1306,38 @@ function collectPickups(g: GameState): void {
 }
 
 /** What the survivor could do right now at a door, if anything. */
-export interface Interaction {
-  place: Place;
-  /** A short verb phrase for the prompt: "Power up the radar", "Search Baraka Savdo". */
-  label: string;
-}
+export type Interaction =
+  | {
+      kind: 'place';
+      place: Place;
+      /** A short verb phrase for the prompt: "Power up the radar", "Search Baraka Savdo". */
+      label: string;
+      name: string;
+    }
+  | { kind: 'car'; car: number; label: string; name: string };
 
-/** The place whose door the survivor is standing at, and what using it would do. Null if none. */
+/** What the survivor could use where they stand (a door, a car), and what using it would do. Null if nothing. */
 export function interactionAt(g: GameState, world: GameWorld): Interaction | null {
   if (g.status !== 'playing') return null;
-  // indoors, the only thing to do is leave
+  // indoors, the only thing to do is leave; at the wheel, to get out
   if (g.inside >= 0) {
     const place = world.places[g.inside];
-    return { place, label: 'Leave the shelter' };
+    return { kind: 'place', place, label: 'Leave the shelter', name: place.name };
+  }
+  if (g.driving >= 0) {
+    const car = g.cars[g.driving];
+    const name = wrecked(car) ? 'The car is wrecked' : car.fuel <= 0 ? 'Out of fuel' : 'Car';
+    return { kind: 'car', car: g.driving, label: 'Get out', name };
+  }
+  const car = carInReach(g.cars, g.player.x, g.player.y);
+  if (car >= 0) {
+    const c = g.cars[car];
+    const name = wrecked(c)
+      ? 'Wrecked'
+      : c.fuel <= 0
+        ? 'Out of fuel'
+        : `Fuel ${Math.round(c.fuel * 100)}%`;
+    return { kind: 'car', car, label: 'Get in', name };
   }
   let near: Place | null = null;
   let nearest: number = PLACES.reach;
@@ -1283,15 +1349,145 @@ export function interactionAt(g: GameState, world: GameWorld): Interaction | nul
     }
   }
   if (!near) return null;
+  const at = (place: Place, label: string): Interaction => ({
+    kind: 'place',
+    place,
+    label,
+    name: place.name,
+  });
   switch (near.kind) {
     case 'radar':
-      return g.used[near.id] ? null : { place: near, label: 'Power up the radar' };
+      return g.used[near.id] ? null : at(near, 'Power up the radar');
     case 'supplies':
     case 'armory':
-      return g.used[near.id] ? null : { place: near, label: `Search ${near.name}` };
+      return g.used[near.id] ? null : at(near, `Search ${near.name}`);
     default:
-      return g.breached[near.id] ? null : { place: near, label: 'Go inside' };
+      return g.breached[near.id] ? null : at(near, 'Go inside');
   }
+}
+
+/** Get into a car, or out of the one you are in. */
+function useCar(g: GameState, world: GameWorld, index: number): void {
+  const car = g.cars[index];
+  if (g.driving === index) {
+    const [x, y] = stepOutSpot(car, world, PLAYER.radius);
+    car.speed = 0; // the handbrake: a car nobody is in stands still
+    g.driving = -1;
+    g.player = { ...g.player, x, y, vx: 0, vy: 0, heading: car.heading, sprinting: false };
+    emit(g, { type: 'car', what: 'exit', x, y, force: 0 });
+    return;
+  }
+  g.driving = index;
+  g.reloading = 0;
+  g.engineTimer = 0;
+  g.player = {
+    ...g.player,
+    x: car.x,
+    y: car.y,
+    vx: 0,
+    vy: 0,
+    heading: car.heading,
+    sprinting: false,
+  };
+  emit(g, { type: 'car', what: 'enter', x: car.x, y: car.y, force: 0 });
+}
+
+/** A step at the wheel: the car moves, the survivor rides in it, and whatever is in the way is hit. */
+function drive(g: GameState, act: GameInput, world: GameWorld, dt: number): void {
+  const car = g.cars[g.driving];
+  const before = Math.abs(car.speed);
+  const fuelBefore = car.fuel;
+  const { crash, running } = stepCar(
+    car,
+    { moveX: act.moveX, moveY: act.moveY },
+    world.colliders,
+    dt,
+  );
+
+  // the survivor rides along (and gets their breath back)
+  const [vx, vy] = carVelocity(car);
+  const p = g.player;
+  const rest = p.rest + dt;
+  const stamina =
+    rest >= PLAYER.regenDelay ? Math.min(1, p.stamina + PLAYER.staminaRegen * dt) : p.stamina;
+  g.player = {
+    ...p,
+    x: car.x,
+    y: car.y,
+    vx,
+    vy,
+    heading: car.heading,
+    sprinting: false,
+    rest,
+    stamina,
+    exhausted: p.exhausted && stamina < PLAYER.exhaustedUntil,
+  };
+
+  // a wall: a knock, or a crash
+  if (crash > CAR.crashSpeed) {
+    const over = crash - CAR.crashSpeed;
+    car.hp = Math.max(0, car.hp - over * CAR.crashWear);
+    addNoise(g, car.x, car.y, CAR.crashNoise, GAME.noise.shotTtl);
+    emit(g, { type: 'noise', x: car.x, y: car.y, radius: CAR.crashNoise });
+    emit(g, { type: 'car', what: 'crash', x: car.x, y: car.y, force: crash });
+    if (crash > CAR.hurtSpeed) {
+      hurt(
+        g,
+        (crash - CAR.hurtSpeed) * CAR.crashHurt,
+        car.x + Math.cos(car.heading),
+        car.y + Math.sin(car.heading),
+      );
+    }
+    if (wrecked(car)) emit(g, { type: 'car', what: 'wrecked', x: car.x, y: car.y, force: crash });
+  }
+
+  // whoever is in the way
+  const h = g.horde;
+  const speed = Math.max(before, Math.abs(car.speed));
+  if (speed >= CAR.hitSpeed) {
+    const reach = CAR.radius + ZOMBIE.radius;
+    const reach2 = reach * reach;
+    const dirX = Math.cos(car.heading) * Math.sign(car.speed || 1);
+    const dirY = Math.sin(car.heading) * Math.sign(car.speed || 1);
+    let struck = 0;
+    for (let i = 0; i < h.used; i++) {
+      if (!isAlive(h, i)) continue;
+      const ox = h.x[i] - car.x;
+      const oy = h.y[i] - car.y;
+      const d2 = ox * ox + oy * oy;
+      if (d2 > reach2) continue;
+      struck++;
+      // struck from where the car came from, so the body flies on ahead of it, and off to the side
+      if (damageZombie(h, i, speed * CAR.hitDamage, car.x - dirX * 2, car.y - dirY * 2)) {
+        registerKill(g, h.x[i], h.y[i]);
+        emit(g, { type: 'hit', x: h.x[i], y: h.y[i], kill: true });
+        continue;
+      }
+      const side = ox * -dirY + oy * dirX > 0 ? 1 : -1; // which side of the bonnet it is on
+      const nx = (dirX - dirY * side) * Math.SQRT1_2;
+      const ny = (dirY + dirX * side) * Math.SQRT1_2;
+      shoveZombie(h, i, nx, ny, speed * CAR.hitShove, CAR.hitStun);
+      emit(g, { type: 'hit', x: h.x[i], y: h.y[i], kill: false });
+    }
+    if (struck > 0) {
+      car.speed -= Math.sign(car.speed) * Math.min(Math.abs(car.speed), CAR.hitSlow * struck);
+      car.hp = Math.max(0, car.hp - CAR.hitWear * struck);
+      if (wrecked(car)) emit(g, { type: 'car', what: 'wrecked', x: car.x, y: car.y, force: 0 });
+    }
+  }
+
+  // the engine is heard
+  if (running || Math.abs(car.speed) > 0.5) {
+    g.engineTimer -= dt;
+    if (g.engineTimer <= 0) {
+      g.engineTimer = CAR.noiseEvery;
+      const radius = engineNoise(car);
+      addNoise(g, car.x, car.y, radius, GAME.noise.ttl);
+      if (Math.abs(car.speed) > 6) emit(g, { type: 'noise', x: car.x, y: car.y, radius });
+    }
+  } else g.engineTimer = 0;
+  if (fuelBefore > 0 && car.fuel <= 0)
+    emit(g, { type: 'car', what: 'fuel', x: car.x, y: car.y, force: 0 });
 }
 
 /**
@@ -1340,6 +1536,8 @@ export function respawn(g: GameState, world: GameWorld, startX: number, startY: 
   g.fireCooldown = 0;
   g.shoveCooldown = 0;
   g.inside = -1;
+  g.driving = -1; // the car stays where the last survivor left it
+  g.engineTimer = 0;
   g.stepTimer = 0;
   g.noises = [];
   g.stats = { kills: 0, shots: 0, hits: 0, damageTaken: 0, shoves: 0 };
@@ -1355,6 +1553,10 @@ export function respawn(g: GameState, world: GameWorld, startX: number, startY: 
 function interact(g: GameState, world: GameWorld): boolean {
   const here = interactionAt(g, world);
   if (!here) return false;
+  if (here.kind === 'car') {
+    useCar(g, world, here.car);
+    return true;
+  }
   const { place } = here;
   if (place.kind === 'radar') {
     g.used[place.id] = true;

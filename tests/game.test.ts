@@ -465,7 +465,8 @@ describe('places', () => {
     goTo('supplies');
     expect(interactionAt(g, world)?.label).toMatch(/^Search /);
     goTo('armory');
-    expect(interactionAt(g, world)?.place.kind).toBe('armory');
+    const armory = interactionAt(g, world);
+    expect(armory?.kind === 'place' && armory.place.kind).toBe('armory');
   });
 
   it('needs you to be at the door, not just near the building', () => {

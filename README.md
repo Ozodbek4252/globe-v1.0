@@ -230,6 +230,16 @@ behind a door works, but it does not win the game.
   a walk but slower than a sprint; at night both are a quarter faster. The people of the city stroll at
   about 1.25 and run at about 4.1, so a walker never catches them in the open and a runner always does.
   Zombies hanging on slow you down, and they never stand in each other's space: a crowd spreads out.
+- **Cars.** Cars stand parked along the real roads (a few dozen in view, each with some fuel in the
+  tank). Walk up to one and press `F` to get in; `W A S D` then steer it where you point (a car turns
+  only while it rolls, and backs up if you point behind it), `F` gets you out. On a road it does
+  nearly 80 km/h, off one about 30; it slides along walls and never crosses one, and a hard crash
+  costs the car (and above about 32 km/h, you) something. Zombies in the way are run down, which
+  wears the car a little each time. Inside, most of a blow lands on the bodywork instead of you, until
+  the car is wrecked. The engine is loud (up to 60 m at speed), so a drive brings the horde; the tank
+  runs down (a full one lasts about seven minutes flat out), and an empty or wrecked car is left where
+  it stands. Cars stay where you leave them, through saves, through the window moving across a big
+  city, and for the next survivor.
 
 **Staying fed.** Hunger drains steadily; at zero you starve and nothing heals. Food crates and first aid
 lie about the streets, shops and clinics have more, and kills sometimes drop some.

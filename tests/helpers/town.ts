@@ -42,15 +42,20 @@ export function emptyStreets(g: ReturnType<typeof createGame>): void {
  * default the day stands still and nobody comes or goes, so that a test is about one thing; pass
  * `cycle: true` and `routine: true` for the real thing.
  */
-export function town(buildings: PlaceBuilding[], options: Partial<GameOptions> = {}, half = 800) {
+export function town(
+  buildings: PlaceBuilding[],
+  options: Partial<GameOptions> = {},
+  half = 800,
+  roads: { points: number[]; width: number }[] = [],
+) {
   const colliders = buildColliders({
     halfSize: half,
     buildings: buildings.map((b) => ({ outer: b.outer })),
     areas: [],
     waterways: [],
-    roads: [],
+    roads,
   });
-  const world = createGameWorld(colliders, [0, 0], buildings);
+  const world = createGameWorld(colliders, [0, 0], buildings, roads);
   const g = createGame(world, {
     seed: 1,
     startX: 0,

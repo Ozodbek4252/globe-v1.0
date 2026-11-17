@@ -111,6 +111,37 @@ function push(n: GameNotice): void {
       announcement.value = 'Radar online. The horde is now on your scope.';
       later(() => banner.value?.id === id && (banner.value = null), 5000);
       break;
+    case 'car':
+      if (n.what === 'enter') {
+        toast.value = { id, text: 'At the wheel · W A S D drive · F get out' };
+        announcement.value = 'In the car. Steer where you want to go; F to get out.';
+        later(() => toast.value?.id === id && (toast.value = null), 3200);
+      } else if (n.what === 'crash') {
+        toast.value = { id, text: 'Crash' };
+        announcement.value = 'You crashed.';
+        later(() => toast.value?.id === id && (toast.value = null), 1400);
+      } else if (n.what === 'fuel') {
+        banner.value = {
+          id,
+          tone: 'danger',
+          title: 'Out of fuel',
+          sub: 'This car is done. Find another.',
+          angle: null,
+        };
+        announcement.value = 'The car is out of fuel.';
+        later(() => banner.value?.id === id && (banner.value = null), 4500);
+      } else if (n.what === 'wrecked') {
+        banner.value = {
+          id,
+          tone: 'danger',
+          title: 'The car is wrecked',
+          sub: 'It will not go, and it will not keep them out. Get out.',
+          angle: null,
+        };
+        announcement.value = 'The car is wrecked. Get out.';
+        later(() => banner.value?.id === id && (banner.value = null), 5000);
+      }
+      break;
     case 'restart':
       reset();
       break;

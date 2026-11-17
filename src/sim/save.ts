@@ -17,6 +17,7 @@ import {
 } from './game';
 import type { Noise } from './horde';
 import type { PlayerState } from './player';
+import type { Car } from './vehicle';
 import type { LedgerEntry } from './window';
 
 /** The arrays and counters of one of the in-place structures (the horde, the people, the buildings). */
@@ -55,6 +56,9 @@ export interface SavedGame {
     doors: number[];
     breached: boolean[];
     doorEventTimer: number;
+    /** The cars and the one being driven (absent in games saved before there were cars). */
+    cars?: Car[];
+    driving?: number;
     stats: GameStats;
     rng: number;
   };
@@ -137,6 +141,8 @@ export function saveGame(g: GameState, options: GameOptions): SavedGame {
       doors: [...g.doors],
       breached: [...g.breached],
       doorEventTimer: g.doorEventTimer,
+      cars: g.cars.map((c) => ({ ...c })),
+      driving: g.driving,
       stats: { ...g.stats },
       rng: g.rng.state,
     },
@@ -195,6 +201,9 @@ export function loadGame(world: GameWorld, saved: SavedGame): GameState {
   g.doors = [...s.doors];
   g.breached = [...s.breached];
   g.doorEventTimer = s.doorEventTimer;
+  // (a game saved before there were cars keeps the ones just parked for it)
+  if (s.cars) g.cars = s.cars.map((c) => ({ ...c }));
+  g.driving = s.cars ? (s.driving ?? -1) : -1;
   g.stats = { ...s.stats };
   g.rng.state = s.rng;
   unpackArrays(g.horde, saved.horde);

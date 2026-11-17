@@ -24,6 +24,7 @@ import { removeZombie, spawnZombie, ZKind, ZState } from './horde';
 import { HState, releaseHuman } from './humans';
 import { POP, roundSeeded } from './population';
 import { packArrays, unpackArrays } from './save';
+import { CAR, parkCars, type Car } from './vehicle';
 import { validSpot } from './world';
 
 /** What is remembered about a building when its tile is not loaded. */
@@ -218,6 +219,10 @@ export function shiftGame(g: GameState, dx: number, dy: number): void {
     pick.x += dx;
     pick.y += dy;
   }
+  for (const car of g.cars) {
+    car.x += dx;
+    car.y += dy;
+  }
   for (const n of g.noises) {
     n.x += dx;
     n.y += dy;
@@ -345,6 +350,24 @@ export function migrateGame(
   g.radarOn = old.radarOn;
   g.inside = -1; // a shelter is a place of the old window; nobody moves while inside, so this is never a loss
   g.doorEventTimer = old.doorEventTimer;
+  // The cars the new window still holds come along (the one being driven first of all); the ground
+  // the old window covered keeps them as they were, and only the new ground gets fresh ones.
+  const newHalf = newWorld.colliders.half;
+  const oldHalf = oldWorld.colliders.half;
+  const seenBefore = (x: number, y: number): boolean =>
+    Math.abs(x - shift[0]) <= oldHalf && Math.abs(y - shift[1]) <= oldHalf;
+  const kept: Car[] = [];
+  let driving = -1;
+  old.cars.forEach((car, i) => {
+    if (Math.abs(car.x) > newHalf - 6 || Math.abs(car.y) > newHalf - 6) return;
+    if (i === old.driving) driving = kept.length;
+    kept.push({ ...car });
+  });
+  g.cars = kept.concat(
+    parkCars(newWorld, g.rng, Math.max(0, CAR.parkMost - kept.length), seenBefore),
+  );
+  g.driving = driving;
+  g.engineTimer = old.engineTimer;
   g.stats = { ...old.stats };
   g.rng.state = old.rng.state;
   // the horde and the street, as they stand

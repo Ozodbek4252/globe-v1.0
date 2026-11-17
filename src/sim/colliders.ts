@@ -6,6 +6,7 @@
 import {
   OCC_BRIDGE,
   OCC_BUILDING,
+  OCC_ROAD,
   OCC_WATER,
   createGrid,
   occupancyAt,
@@ -137,6 +138,8 @@ export function buildColliders(
   }
   for (const w of source.waterways) stampPolyline(field, w.points, w.width / 2, OCC_WATER);
   for (const r of source.roads) {
+    // roads are not obstacles, but a car is far faster on one, so they are marked too
+    stampPolyline(field, r.points, r.width / 2 + 0.4, OCC_ROAD);
     if (r.bridge) stampPolyline(field, r.points, r.width / 2 + 0.6, OCC_BRIDGE);
   }
 

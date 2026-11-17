@@ -57,10 +57,12 @@ import { sendHunting, spawnZombie, ZKind, ZState } from '../sim/horde';
 import { HState, spawnHuman } from '../sim/humans';
 import { speedOf, type PlayerState } from '../sim/player';
 import { isSavedGame, loadGame, saveGame, type SavedGame } from '../sim/save';
+import { CAR, createCar, onRoad, wrecked, type Car } from '../sim/vehicle';
 import { ledgerOutside, migrateGame, type Ledger } from '../sim/window';
 import { tileAt, type TileIndex } from './tiles';
 import type { PlaceKind } from '../sim/places';
 import { compassName, screenAngle, screenOffset } from './bearings';
+import { createCarRenderer } from './cars';
 import { createSurvivor } from './character';
 import { createCutaway, type Cutaway } from './cutaway';
 import { createEffects, type AimMode } from './effects';
@@ -182,8 +184,10 @@ export interface PlayerStatus {
   near: number;
   /** The city's people now: well, bitten and turning, turned (in the streets and indoors), and at the start. */
   population: { healthy: number; bitten: number; zombies: number; initial: number };
-  /** What the survivor could do at the door they are standing at (null when not at one). */
+  /** What the survivor could do where they stand: use a door, get into a car (null when nothing). */
   prompt: { label: string; name: string } | null;
+  /** At the wheel: how fast (m/s), the tank (0 to 1), the car's condition (0 to 1); null on foot. */
+  car: { speed: number; fuel: number; condition: number; wrecked: boolean } | null;
   /** The radar is on: the minimap is available. */
   radarOn: boolean;
   /** The next goal, how far off it is, and where it lies on the screen (radians clockwise from up). */
@@ -223,6 +227,8 @@ export type GameNotice =
   | { type: 'radar'; place: string }
   | { type: 'enter'; place: string }
   | { type: 'breach'; place: string }
+  /** The car: got in, got out, a hard crash (`force` is the speed lost, m/s), the tank ran dry, or it was wrecked. */
+  | { type: 'car'; what: 'enter' | 'exit' | 'crash' | 'fuel' | 'wrecked'; force: number }
   /** A new game has begun: forget everything announced. */
   | { type: 'respawn' }
   | { type: 'restart' }
@@ -267,6 +273,18 @@ export interface CityDebug {
   goTo(kind: PlaceKind): boolean;
   /** Stop the game stepping (the picture keeps drawing), so a scene can be held still. */
   freeze(on: boolean): void;
+  /** Put a car beside the survivor, pointing their way, with a full tank. Returns its index. */
+  summonCar(): number;
+  /** What the scene is feeding the game right now, and the car being driven. */
+  probe(): {
+    paused: boolean;
+    frozen: boolean;
+    move: [number, number];
+    keys: string[];
+    car: Car | null;
+  };
+  /** The cars: how many there are, which one is being driven, and the nearest one's distance. */
+  cars(): { count: number; driving: number; nearest: number; onRoad: number };
   /** The numbers worth checking. */
   snapshot(): {
     status: GameStatus;
@@ -286,6 +304,9 @@ export interface CityDebug {
     /** Which way the survivor faces, in radians counter-clockwise from east. */
     heading: number;
     radarOn: boolean;
+    /** The car being driven (-1 on foot) and its speed (m/s). */
+    driving: number;
+    carSpeed: number;
     /** How many places have been used up. */
     used: number;
     /** The place id of the shelter the survivor is in (-1 outdoors), and what is left of its door. */
@@ -715,7 +736,7 @@ export async function createCityScene(
       200,
       near ? 1.5 : 5,
     );
-    const world = createGameWorld(colliders, spawn, map.buildings);
+    const world = createGameWorld(colliders, spawn, map.buildings, map.roads);
     const placeMarkers = keep(
       createPlaceMarkers(
         world.places,
@@ -805,6 +826,9 @@ export async function createCityScene(
   const zombies = createZombieRenderer(game.horde.capacity);
   own(zombies);
   scene.add(zombies.object);
+  const cars = createCarRenderer(CAR.parkMost + 8);
+  own(cars);
+  scene.add(cars.object);
   const people = createPeopleRenderer(Math.max(1, game.humans.capacity));
   own(people);
   scene.add(people.object);
@@ -1136,6 +1160,12 @@ export async function createCityScene(
       case 'breach':
         notices.emit({ type: 'breach', place: gameWorld.places[e.place].name });
         break;
+      case 'car':
+        if (e.what === 'crash') effects.noise(e.x, e.y, Math.min(12, e.force * 1.5));
+        if (e.what !== 'crash' || e.force > CAR.hurtSpeed) {
+          notices.emit({ type: 'car', what: e.what, force: e.force });
+        }
+        break;
       case 'lost':
         notices.emit({
           type: 'over',
@@ -1173,6 +1203,7 @@ export async function createCityScene(
 
   let debugAutoAim = false;
   let debugFrozen = false;
+  let lastMove: [number, number] = [0, 0];
   function nearestZombie(): [number, number] | null {
     const h = game.horde;
     let best = -1;
@@ -1334,6 +1365,7 @@ export async function createCityScene(
       interact: interactQueued,
       weapon: weaponQueued,
     };
+    lastMove = [input.moveX, input.moveY];
     simClock = debugFrozen || paused ? 0 : simClock + dt;
     const simDt = paused ? 0 : dt; // animations that follow the game stand still too
     let steps = 0;
@@ -1368,7 +1400,8 @@ export async function createCityScene(
     // a dead survivor falls over
     downAmount = gamePhase === 'lost' ? Math.min(1, downAmount + dt / 0.6) : 0;
     survivor.setDown(downAmount);
-    survivor.object.visible = game.inside < 0; // out of sight while sheltering
+    const driving = game.driving >= 0;
+    survivor.object.visible = game.inside < 0 && !driving; // out of sight while sheltering or at the wheel
     survivor.place(
       px,
       py,
@@ -1379,11 +1412,12 @@ export async function createCityScene(
     );
 
     if (cameraMode === 'follow') {
-      // the camera leads a little in the direction of travel
+      // the camera leads a little in the direction of travel (a good way ahead of a car)
+      const lead = driving ? 14 : 2.5;
       goal = {
         ...goal,
-        x: px + clamp(player.vx * 0.3, -2.5, 2.5),
-        z: -(py + clamp(player.vy * 0.3, -2.5, 2.5)),
+        x: px + clamp(player.vx * 0.5, -lead, lead),
+        z: -(py + clamp(player.vy * 0.5, -lead, lead)),
         distance: Math.min(goal.distance, FOLLOW_MAX_DISTANCE),
       };
     }
@@ -1402,21 +1436,26 @@ export async function createCityScene(
     cutaway.update(cutPlayer, camera.position, walking ? 2.4 + current.distance * 0.06 : 0);
     survivor.setRingScale(clamp(current.distance / 36, 1, 5));
 
-    // flashlight: on by itself when it gets dark, and L overrides
+    // flashlight: on by itself when it gets dark, and L overrides. At the wheel it is the headlamps.
     const lit = flashlightOn() && game.inside < 0;
-    flashlight.intensity = lit ? 420 * (0.35 + 0.65 * darkness) : 0;
+    const beamFrom = driving ? CAR.length / 2 : 0.3;
+    const beamTo = driving ? 34 : 16;
+    flashlight.intensity = lit ? (driving ? 1400 : 420) * (0.35 + 0.65 * darkness) : 0;
+    flashlight.angle = driving ? 0.7 : 0.52;
+    flashlight.distance = driving ? 110 : 70;
     flashlight.position.set(
-      px + Math.cos(player.heading) * 0.3,
-      1.5,
-      -(py + Math.sin(player.heading) * 0.3),
+      px + Math.cos(player.heading) * beamFrom,
+      driving ? 0.8 : 1.5,
+      -(py + Math.sin(player.heading) * beamFrom),
     );
     flashlight.target.position.set(
-      px + Math.cos(player.heading) * 16,
+      px + Math.cos(player.heading) * beamTo,
       0,
-      -(py + Math.sin(player.heading) * 16),
+      -(py + Math.sin(player.heading) * beamTo),
     );
 
-    // the horde, the people, the supplies and the shots
+    // the cars, the horde, the people, the supplies and the shots
+    cars.update(game.cars, game.driving, px, py, player.heading, lit);
     zombies.update(game.horde, simDt, current.x, -current.z, current.distance);
     people.update(game.humans, now / 1000, current.distance, current.x, -current.z);
     pickupMarkers.sync(game.pickups, now / 1000, darkness);
@@ -1541,7 +1580,16 @@ export async function createCityScene(
         near,
         population: cityPopulation(),
         loading: shifting,
-        prompt: here ? { label: here.label, name: here.place.name } : null,
+        prompt: here ? { label: here.label, name: here.name } : null,
+        car:
+          game.driving >= 0
+            ? {
+                speed: Math.abs(game.cars[game.driving].speed),
+                fuel: game.cars[game.driving].fuel,
+                condition: game.cars[game.driving].hp / CAR.hp,
+                wrecked: wrecked(game.cars[game.driving]),
+              }
+            : null,
         radarOn: game.radarOn,
         objective,
         inside:
@@ -1763,6 +1811,31 @@ export async function createCityScene(
           freeze(on) {
             debugFrozen = on;
           },
+          probe() {
+            return {
+              paused,
+              frozen: debugFrozen,
+              move: [...lastMove] as [number, number],
+              keys: [...keys],
+              car: game.driving >= 0 ? { ...game.cars[game.driving] } : null,
+            };
+          },
+          summonCar() {
+            const p = game.player;
+            const ox = -Math.sin(p.heading) * 3;
+            const oy = Math.cos(p.heading) * 3;
+            game.cars.push(createCar(p.x + ox, p.y + oy, p.heading, 1));
+            return game.cars.length - 1;
+          },
+          cars() {
+            let nearest = Infinity;
+            let road = 0;
+            for (const c of game.cars) {
+              nearest = Math.min(nearest, Math.hypot(c.x - game.player.x, c.y - game.player.y));
+              if (onRoad(colliders, c.x, c.y)) road++;
+            }
+            return { count: game.cars.length, driving: game.driving, nearest, onRoad: road };
+          },
           snapshot: () => ({
             status: game.status,
             health: game.health,
@@ -1779,6 +1852,8 @@ export async function createCityScene(
             y: game.player.y,
             heading: game.player.heading,
             radarOn: game.radarOn,
+            driving: game.driving,
+            carSpeed: game.driving >= 0 ? game.cars[game.driving].speed : 0,
             used: game.used.filter(Boolean).length,
             inside: game.inside,
             door: game.inside >= 0 ? game.doors[game.inside] : -1,

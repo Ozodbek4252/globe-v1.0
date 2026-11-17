@@ -14,6 +14,15 @@ export interface GameWorld {
   buildings: readonly PlaceBuilding[];
   /** The buildings that do something (radar, shelters, supplies, armory), with their doors. */
   places: readonly Place[];
+  /** The roads, as flat polylines with a width: where cars are found, and where they go fast. */
+  roads: readonly WorldRoad[];
+}
+
+export interface WorldRoad {
+  /** x0, y0, x1, y1, ... in metres. */
+  points: readonly number[];
+  /** Metres. */
+  width: number;
 }
 
 /**

@@ -452,7 +452,41 @@ onBeforeUnmount(() => {
           <span>{{ player.food <= 0 ? 'Starving' : player.food < 25 ? 'Hungry' : 'Food' }}</span>
         </div>
         <div
-          v-if="player.camera === 'follow'"
+          v-if="player.camera === 'follow' && player.car"
+          class="car"
+          role="group"
+          aria-label="Car"
+        >
+          <span class="car-speed"
+            ><b>{{ Math.round(player.car.speed * 3.6) }}</b> km/h</span
+          >
+          <span
+            class="car-fuel"
+            :class="{ low: player.car.fuel < 0.2, empty: player.car.fuel <= 0 }"
+            role="progressbar"
+            aria-label="Fuel"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            :aria-valuenow="Math.round(player.car.fuel * 100)"
+          >
+            <i :style="{ width: Math.round(player.car.fuel * 100) + '%' }"></i>
+            <span>{{ player.car.fuel <= 0 ? 'Out of fuel' : 'Fuel' }}</span>
+          </span>
+          <span
+            class="car-body"
+            :class="{ low: player.car.condition < 0.3, wrecked: player.car.wrecked }"
+            role="progressbar"
+            aria-label="Car condition"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            :aria-valuenow="Math.round(player.car.condition * 100)"
+          >
+            <i :style="{ width: Math.round(player.car.condition * 100) + '%' }"></i>
+            <span>{{ player.car.wrecked ? 'Wrecked' : 'Car' }}</span>
+          </span>
+        </div>
+        <div
+          v-if="player.camera === 'follow' && !player.car"
           class="stamina"
           :class="{ tired: player.exhausted, running: player.sprinting }"
           role="progressbar"
@@ -476,7 +510,8 @@ onBeforeUnmount(() => {
             <kbd>1</kbd><kbd>2</kbd> gun
           </li>
           <li>
-            <kbd>Space</kbd> shove &nbsp; <kbd>F</kbd> use a door &nbsp; <kbd>L</kbd> flashlight
+            <kbd>Space</kbd> shove &nbsp; <kbd>F</kbd> use a door, get in or out of a car &nbsp;
+            <kbd>L</kbd> flashlight
           </li>
           <li><kbd>Q</kbd><kbd>E</kbd> or right-drag: turn camera &nbsp; <kbd>Wheel</kbd> zoom</li>
           <li>
@@ -809,6 +844,65 @@ onBeforeUnmount(() => {
   letter-spacing: 0.06em;
   color: var(--ink);
   mix-blend-mode: normal;
+}
+
+/* at the wheel: the speed, the tank and the state of the car, in place of the stamina bar */
+.car {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(300px, 70vw);
+}
+.car-speed {
+  flex: 0 0 auto;
+  min-width: 64px;
+  font: 500 11px var(--f-mono);
+  letter-spacing: 0.06em;
+  color: var(--ink);
+}
+.car-speed b {
+  font-size: 15px;
+  font-weight: 600;
+}
+.car-fuel,
+.car-body {
+  position: relative;
+  flex: 1 1 0;
+  height: 16px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  overflow: hidden;
+  backdrop-filter: blur(6px);
+}
+.car-fuel i,
+.car-body i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  transition: width 0.2s linear;
+}
+.car-fuel i {
+  background: linear-gradient(90deg, #6a8fcf, #9fc2ff);
+}
+.car-fuel.low i {
+  background: #c98a2a;
+}
+.car-body i {
+  background: linear-gradient(90deg, #7b8f7a, #a9c3a4);
+}
+.car-body.low i,
+.car-fuel.empty i {
+  background: #c9574d;
+}
+.car-fuel span,
+.car-body span {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font: 500 11px var(--f-mono);
+  letter-spacing: 0.06em;
+  color: var(--ink);
 }
 
 .city-credit {
