@@ -20,6 +20,7 @@ import {
   foldOutside,
   ledgerOutside,
   migrateGame,
+  readLedger,
   shiftGame,
   stashWindow,
   type Ledger,
@@ -245,6 +246,33 @@ describe('a tile that is away', () => {
     ledger.set(999_001, { ...entry(30, 4, 5), roaming: 6 }); // elsewhere
     ledger.set(999_002, entry(7, 0, 0));
     expect(ledgerOutside(ledger, world)).toEqual({ healthy: 37, bitten: 4, zombies: 11 });
+  });
+});
+
+describe('a ledger read from a save', () => {
+  it('fills in what an older save did not keep, so nothing counts as NaN', () => {
+    const old = {
+      healthy: 12,
+      incubating: 1,
+      undead: 0,
+      doorHp: 50,
+      open: false,
+      used: false,
+      breached: false,
+      shelterDoor: 0,
+    };
+    const ledger = readLedger([[7, old]], 600);
+    const e = ledger.get(7);
+    expect(e?.roaming).toBe(0);
+    expect(e?.tick).toBe(600);
+    expect(e?.healthy).toBe(12);
+    const out = ledgerOutside(ledger, windowWorld([0, 0], 800));
+    expect(Number.isFinite(out.healthy + out.bitten + out.zombies)).toBe(true);
+    expect(out.healthy).toBe(12);
+    // a full entry is kept as it is
+    const full = readLedger([[8, { ...old, roaming: 3, tick: 120 }]], 600).get(8);
+    expect(full?.roaming).toBe(3);
+    expect(full?.tick).toBe(120);
   });
 });
 

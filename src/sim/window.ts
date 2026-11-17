@@ -95,6 +95,26 @@ export function advanceEntry(e: LedgerEntry, tick: number, rng: Rng): void {
   }
 }
 
+/**
+ * A ledger from a saved game. A game saved before the ledger kept roaming zombies and a tick has
+ * entries without them: they are taken as up to date at `tick`, with nobody roaming.
+ */
+export function readLedger(
+  entries: readonly [number, Partial<LedgerEntry>][],
+  tick: number,
+): Ledger {
+  const ledger: Ledger = new Map();
+  for (const [id, e] of entries) {
+    ledger.set(id, {
+      ...emptyEntry(tick),
+      ...e,
+      roaming: Number.isFinite(e.roaming) ? (e.roaming as number) : 0,
+      tick: Number.isFinite(e.tick) ? (e.tick as number) : tick,
+    });
+  }
+  return ledger;
+}
+
 /** Bring every entry up to `tick` (cheap: an entry with nobody sick is skipped at once). */
 export function advanceLedger(ledger: Ledger, tick: number, rng: Rng): void {
   for (const e of ledger.values()) advanceEntry(e, tick, rng);

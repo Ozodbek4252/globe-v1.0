@@ -62,9 +62,9 @@ export const CAR = {
   /** How near the survivor must be to a car's edge to get in. */
   reach: 2.4,
   /** Parking: roads at least this wide carry cars, this far apart, up to this many per window. */
-  parkWidth: 5.5,
-  parkGap: 110,
-  parkMost: 60 as number,
+  parkWidth: 3.5,
+  parkGap: 35,
+  parkMost: 400 as number,
 } as const;
 
 export interface Car {

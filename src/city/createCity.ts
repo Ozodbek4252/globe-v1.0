@@ -58,7 +58,13 @@ import { HState, spawnHuman } from '../sim/humans';
 import { speedOf, type PlayerState } from '../sim/player';
 import { isSavedGame, loadGame, saveGame, type SavedGame } from '../sim/save';
 import { CAR, createCar, onRoad, wrecked, type Car } from '../sim/vehicle';
-import { ledgerOutside, migrateGame, type Ledger } from '../sim/window';
+import {
+  ledgerOutside,
+  migrateGame,
+  readLedger,
+  type Ledger,
+  type LedgerEntry,
+} from '../sim/window';
 import { tileAt, type TileIndex } from './tiles';
 import type { PlaceKind } from '../sim/places';
 import { compassName, screenAngle, screenOffset } from './bearings';
@@ -777,9 +783,10 @@ export async function createCityScene(
   // game has ever held (buildings keep their state when their tile is not loaded)
   const tiled = options.tiled ?? null;
   let origin: [number, number] = data.origin ?? [0, 0];
-  const ledger: Ledger = new Map(
-    isSavedGame(setup.resume) && setup.resume.city ? setup.resume.city.ledger : [],
-  );
+  const ledger: Ledger =
+    isSavedGame(setup.resume) && setup.resume.city
+      ? readLedger(setup.resume.city.ledger, setup.resume.game.tick)
+      : new Map<number, LedgerEntry>();
   let seed = setup.seed ?? Math.floor(Math.random() * 0xffffffff);
   // the day: it starts at this hour and goes by as you play, an hour a minute; the game needs to know
   // when the sun rises and sets over this place, since that is when the dead are at their worst
