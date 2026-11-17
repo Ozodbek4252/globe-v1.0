@@ -48,6 +48,7 @@ import {
   type GameInput,
   type GameOptions,
   type GameWorld,
+  type Population,
   type GameState,
   type GameStatus,
   type WeaponName,
@@ -56,7 +57,7 @@ import { sendHunting, spawnZombie, ZKind, ZState } from '../sim/horde';
 import { HState, spawnHuman } from '../sim/humans';
 import { speedOf, type PlayerState } from '../sim/player';
 import { isSavedGame, loadGame, saveGame, type SavedGame } from '../sim/save';
-import { migrateGame, type Ledger } from '../sim/window';
+import { ledgerOutside, migrateGame, type Ledger } from '../sim/window';
 import { tileAt, type TileIndex } from './tiles';
 import type { PlaceKind } from '../sim/places';
 import { compassName, screenAngle, screenOffset } from './bearings';
@@ -158,6 +159,8 @@ export interface PlayerStatus {
   hour: number;
   night: number;
   cycle: boolean;
+  /** The next part of the city is being built (a window of a tiled city is moving). */
+  loading: boolean;
   /** The game is paused: nothing moves, hunger and the clock stand still. */
   paused: boolean;
   /** The gun in hand, and whether the shotgun has been found. */
@@ -1141,8 +1144,8 @@ export async function createCityScene(
           shots: game.stats.shots,
           hits: game.stats.hits,
           damageTaken: Math.round(game.stats.damageTaken),
-          healthy: game.population.healthy,
-          initial: game.population.initial,
+          healthy: cityPopulation().healthy,
+          initial: cityPopulation().initial,
         });
         break;
       default:
@@ -1188,6 +1191,19 @@ export async function createCityScene(
   /** Begin a new game from the start: a fresh horde, supplies and clock, and the survivor back at the spawn. */
   // ---------- a window of a bigger city: moving it as the survivor walks ----------
   let shifting = false;
+  /**
+   * The people of the city: the window's, and in a tiled city also everyone the ledger holds beyond
+   * it (as last known). `initial` is everyone ever counted, so "still well" is out of a steady number.
+   */
+  function cityPopulation(): Population {
+    const p = game.population;
+    if (!tiled) return { ...p };
+    const beyond = ledgerOutside(ledger, gameWorld);
+    const healthy = p.healthy + beyond.healthy;
+    const bitten = p.bitten + beyond.bitten;
+    const zombies = p.zombies + beyond.zombies;
+    return { healthy, bitten, zombies, initial: healthy + bitten + zombies };
+  }
   /** Called each frame: is it time to move the window, or to have the next one ready? */
   function watchWindow(): void {
     if (!tiled) return;
@@ -1523,7 +1539,8 @@ export async function createCityScene(
         kills: game.stats.kills,
         zombies: game.horde.alive,
         near,
-        population: { ...game.population },
+        population: cityPopulation(),
+        loading: shifting,
         prompt: here ? { label: here.label, name: here.place.name } : null,
         radarOn: game.radarOn,
         objective,

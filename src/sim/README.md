@@ -26,6 +26,12 @@ City scale (a survivor, a city of people, a horde, a clock), all in metres, x ea
 | `save.ts`       | A game as plain data, written out and read back exactly                                                |
 | `window.ts`     | Carrying a game into the next window of a big city: shift, fold, and a ledger of buildings by id       |
 
+In a tiled city the ledger is the rest of the city. A building's entry keeps its people, its door, its
+place state, and its roaming dead (zombies the window left in its street); when a window moves, every
+entry is brought up to date with the same rules as `stepOutbreak` in strides of twenty seconds, so the
+outbreak spreads where nobody is looking, and the roaming take to the street as individuals when their
+tile is loaded again, as room in the horde allows. The city's numbers are the window's plus the ledger's.
+
 `src/lib/rng.ts` is the seeded random number generator they all use.
 
 ## Rules for this folder

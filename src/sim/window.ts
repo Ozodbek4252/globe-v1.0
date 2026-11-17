@@ -19,9 +19,12 @@ import {
   type GameState,
   type GameWorld,
 } from './game';
-import { removeZombie, ZState } from './horde';
+import { nextFloat, nextRange, type Rng } from '../lib/rng';
+import { removeZombie, spawnZombie, ZKind, ZState } from './horde';
 import { HState, releaseHuman } from './humans';
+import { POP, roundSeeded } from './population';
 import { packArrays, unpackArrays } from './save';
+import { validSpot } from './world';
 
 /** What is remembered about a building when its tile is not loaded. */
 export interface LedgerEntry {
@@ -35,9 +38,82 @@ export interface LedgerEntry {
   breached: boolean;
   /** What is left of a shelter's door (the game's own door, not the building's). */
   shelterDoor: number;
+  /**
+   * The turned who are out in the street near this building, not as individuals: zombies the window
+   * left behind, and those who came out while the tile was away. They take to the street as
+   * individuals when the tile is loaded again.
+   */
+  roaming: number;
+  /** The game tick this was last brought up to date; the outbreak inside goes on from there. */
+  tick: number;
 }
 
 export type Ledger = Map<number, LedgerEntry>;
+
+/** A fresh entry for a building the ledger has not seen (nobody in it, as far as it knows). */
+const emptyEntry = (tick: number): LedgerEntry => ({
+  healthy: 0,
+  incubating: 0,
+  undead: 0,
+  doorHp: 0,
+  open: false,
+  used: false,
+  breached: false,
+  shelterDoor: GAME.shelter.door,
+  roaming: 0,
+  tick,
+});
+
+/**
+ * The outbreak inside a building while its tile was away, brought up to `tick`: the same rules as
+ * `stepOutbreak`, in strides of up to twenty seconds, by day (the night is not known from here). The
+ * turned who come out join the roaming; the well do not run out into a street nobody holds.
+ */
+export function advanceEntry(e: LedgerEntry, tick: number, rng: Rng): void {
+  let seconds = Math.max(0, (tick - e.tick) / 60);
+  e.tick = tick;
+  if (e.incubating + e.undead === 0 || seconds < 1) return;
+  while (seconds > 0) {
+    const stride = Math.min(20, seconds);
+    seconds -= stride;
+    const turned = Math.min(
+      e.incubating,
+      roundSeeded((e.incubating * stride) / POP.incubation, rng),
+    );
+    e.incubating -= turned;
+    e.undead += turned;
+    const bitten = Math.min(e.healthy, roundSeeded(e.undead * POP.bite * stride, rng));
+    e.healthy -= bitten;
+    e.incubating += bitten;
+    if (e.undead >= 2 || (e.undead > 0 && e.healthy === 0 && e.incubating === 0)) {
+      const out = Math.min(e.undead, Math.max(1, roundSeeded(e.undead * POP.emerge * stride, rng)));
+      e.undead -= out;
+      e.roaming += out;
+    }
+    if (e.incubating + e.undead === 0) break;
+  }
+}
+
+/** Bring every entry up to `tick` (cheap: an entry with nobody sick is skipped at once). */
+export function advanceLedger(ledger: Ledger, tick: number, rng: Rng): void {
+  for (const e of ledger.values()) advanceEntry(e, tick, rng);
+}
+
+/** What the ledger holds for buildings the window does not: the rest of the city, as last known. */
+export function ledgerOutside(
+  ledger: Ledger,
+  world: GameWorld,
+): { healthy: number; bitten: number; zombies: number } {
+  const inWindow = new Set(world.buildings.map((b) => b.id));
+  const out = { healthy: 0, bitten: 0, zombies: 0 };
+  for (const [id, e] of ledger) {
+    if (inWindow.has(id)) continue;
+    out.healthy += e.healthy;
+    out.bitten += e.incubating;
+    out.zombies += e.undead + e.roaming;
+  }
+  return out;
+}
 
 /** Write every building of the window into the ledger, as it is now. */
 export function stashWindow(g: GameState, world: GameWorld, ledger: Ledger): void {
@@ -52,6 +128,8 @@ export function stashWindow(g: GameState, world: GameWorld, ledger: Ledger): voi
       undead: o.undead[b],
       doorHp: o.doorHp[b],
       open: o.open[b] === 1,
+      roaming: ledger.get(id)?.roaming ?? 0,
+      tick: g.tick,
       used: place ? g.used[place.id] : (ledger.get(id)?.used ?? false),
       breached: place ? g.breached[place.id] : (ledger.get(id)?.breached ?? false),
       shelterDoor: place ? g.doors[place.id] : (ledger.get(id)?.shelterDoor ?? GAME.shelter.door),
@@ -65,6 +143,7 @@ export function applyLedger(g: GameState, world: GameWorld, ledger: Ledger): voi
   for (let b = 0; b < o.count; b++) {
     const entry = ledger.get(world.buildings[b].id);
     if (!entry) continue;
+    advanceEntry(entry, g.tick, g.rng); // what happened inside while the tile was away
     o.healthy[b] = entry.healthy;
     o.incubating[b] = entry.incubating;
     o.undead[b] = entry.undead;
@@ -78,6 +157,33 @@ export function applyLedger(g: GameState, world: GameWorld, ledger: Ledger): voi
     g.breached[place.id] = entry.breached;
     if (place.kind === 'shelter') g.doors[place.id] = entry.shelterDoor;
   }
+  releaseRoaming(g, world, ledger);
+}
+
+/** The roaming zombies of the window's buildings take to the street, near their doors, as room allows. */
+export function releaseRoaming(g: GameState, world: GameWorld, ledger: Ledger): number {
+  const o = g.outbreak;
+  let placed = 0;
+  for (let b = 0; b < o.count; b++) {
+    const entry = ledger.get(world.buildings[b].id);
+    if (!entry || entry.roaming <= 0 || Number.isNaN(o.doorX[b])) continue;
+    while (entry.roaming > 0) {
+      let spot: [number, number] | null = null;
+      for (let tries = 0; tries < 8 && !spot; tries++) {
+        const a = nextFloat(g.rng) * Math.PI * 2;
+        const r = nextRange(g.rng, 6, 70);
+        const x = o.doorX[b] + Math.cos(a) * r;
+        const y = o.doorY[b] + Math.sin(a) * r;
+        if (validSpot(world, x, y, 0.6)) spot = [x, y];
+      }
+      if (!spot) break;
+      const kind = nextFloat(g.rng) < GAME.outbreak.runners ? ZKind.RUNNER : ZKind.WALKER;
+      if (spawnZombie(g.horde, spot[0], spot[1], kind, ZState.WANDER) < 0) return placed;
+      entry.roaming--;
+      placed++;
+    }
+  }
+  return placed;
 }
 
 /** Move everything with a position by (dx, dy): the new window's coordinates. */
@@ -137,16 +243,27 @@ function nearestBuilding(g: GameState, x: number, y: number): number {
 
 /**
  * Everyone beyond `half` of the origin leaves the street for the nearest building the game knows:
- * zombies as turned people inside it, people as well ones. Returns how many of each were folded.
+ * zombies stay in its street, as roaming in the ledger; people go in as well ones (the bitten as
+ * bitten). Returns how many of each were folded.
  */
-export function foldOutside(g: GameState, half: number): { zombies: number; people: number } {
+export function foldOutside(
+  g: GameState,
+  world: GameWorld,
+  half: number,
+  ledger: Ledger,
+): { zombies: number; people: number } {
   const out = { zombies: 0, people: 0 };
   const h = g.horde;
   for (let i = 0; i < h.used; i++) {
     if (h.state[i] >= ZState.DEAD) continue;
     if (Math.abs(h.x[i]) <= half && Math.abs(h.y[i]) <= half) continue;
     const b = nearestBuilding(g, h.x[i], h.y[i]);
-    if (b >= 0) g.outbreak.undead[b]++;
+    if (b >= 0) {
+      const id = world.buildings[b].id;
+      const entry = ledger.get(id) ?? emptyEntry(g.tick);
+      entry.roaming++;
+      ledger.set(id, entry);
+    }
     removeZombie(h, i);
     out.zombies++;
   }
@@ -184,8 +301,9 @@ export function migrateGame(
   stashWindow(old, oldWorld, ledger);
   shiftGame(old, shift[0], shift[1]);
   // fold against the new window's extent, with the old buildings still at hand to take them in
-  foldOutside(old, newWorld.colliders.half);
+  foldOutside(old, oldWorld, newWorld.colliders.half, ledger);
   stashWindow(old, oldWorld, ledger); // the fold changed some counts
+  advanceLedger(ledger, old.tick, old.rng); // and the rest of the city has not stood still
 
   const g = createGame(newWorld, {
     ...options,

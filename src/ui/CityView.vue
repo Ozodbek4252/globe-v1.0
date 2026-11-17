@@ -415,6 +415,9 @@ onBeforeUnmount(() => {
         <span v-if="player && player.night > 0.5" class="city-night" role="status"
           >Night: the dead are restless</span
         >
+        <span v-if="player?.loading" class="city-loading-next" role="status"
+          >Loading the next part of the city…</span
+        >
       </div>
 
       <div v-if="player" class="city-status">
@@ -642,6 +645,12 @@ onBeforeUnmount(() => {
 .city-time input {
   width: 100%;
   accent-color: var(--accent);
+}
+.city-loading-next {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
 }
 .city-night {
   display: block;

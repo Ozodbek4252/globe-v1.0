@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createRng } from '../src/lib/rng';
 import { buildColliders } from '../src/sim/colliders';
 import {
   createGame,
@@ -14,12 +15,15 @@ import { hordeChecksum, spawnZombie, ZKind, ZState } from '../src/sim/horde';
 import { HState, spawnHuman } from '../src/sim/humans';
 import type { PlaceBuilding } from '../src/sim/places';
 import {
+  advanceEntry,
   applyLedger,
   foldOutside,
+  ledgerOutside,
   migrateGame,
   shiftGame,
   stashWindow,
   type Ledger,
+  type LedgerEntry,
 } from '../src/sim/window';
 import { box, DT } from './helpers/town';
 
@@ -109,9 +113,14 @@ describe('folding whoever leaves the window', () => {
     const bitten = spawnHuman(g.humans, 0, 900, HState.WALK); // outside, bitten
     g.humans.state[bitten] = HState.BITTEN;
     g.humans.alive--;
-    const folded = foldOutside(g, 800);
+    const ledger: Ledger = new Map();
+    const folded = foldOutside(g, world, 800, ledger);
     expect(folded).toEqual({ zombies: 1, people: 2 });
     expect(g.horde.alive).toBe(1);
+    // the zombie outside stays in the street of the nearest building, as roaming
+    let roaming = 0;
+    for (const e of ledger.values()) roaming += e.roaming;
+    expect(roaming).toBe(1);
     expect(g.humans.alive).toBe(aliveBefore); // the two outsiders are gone, the crowd is still there
     const o = g.outbreak;
     let undead = 0;
@@ -122,8 +131,8 @@ describe('folding whoever leaves the window', () => {
       incubating += o.incubating[b];
       healthy += o.healthy[b];
     }
-    // the ones outside went indoors, by kind; the inside zombie is still in the street
-    expect(undead).toBe(1);
+    // the people outside went indoors, by kind; the inside zombie is still in the street
+    expect(undead).toBe(0);
     expect(incubating).toBe(1);
     expect(healthy).toBe(indoorsBefore + 1); // the one well person who was outside went in
   });
@@ -165,6 +174,77 @@ describe('the ledger', () => {
     applyLedger(gb, a, ledger);
     expect(gb.used.every(Boolean)).toBe(true);
     expect(gb.breached.every(Boolean)).toBe(true);
+  });
+});
+
+describe('a tile that is away', () => {
+  const entry = (healthy: number, incubating: number, undead: number): LedgerEntry => ({
+    healthy,
+    incubating,
+    undead,
+    doorHp: 100,
+    open: false,
+    used: false,
+    breached: false,
+    shelterDoor: 600,
+    roaming: 0,
+    tick: 0,
+  });
+  const total = (e: LedgerEntry): number => e.healthy + e.incubating + e.undead + e.roaming;
+
+  it('goes on with the outbreak inside: the bitten turn, the turned bite, and some come out', () => {
+    const e = entry(80, 0, 3);
+    const rng = createRng(5);
+    advanceEntry(e, 60 * 120, rng); // two minutes
+    expect(e.tick).toBe(60 * 120);
+    expect(e.healthy).toBeLessThan(80);
+    expect(e.roaming).toBeGreaterThan(0);
+    expect(total(e)).toBe(83);
+    // and again, from where it got to
+    const before = e.healthy;
+    advanceEntry(e, 60 * 240, rng);
+    expect(e.healthy).toBeLessThanOrEqual(before);
+    expect(total(e)).toBe(83);
+  });
+
+  it('leaves a well building alone, and costs nothing to look at', () => {
+    const e = entry(80, 0, 0);
+    advanceEntry(e, 60 * 3600, createRng(1));
+    expect(e).toMatchObject({ healthy: 80, roaming: 0, tick: 60 * 3600 });
+  });
+
+  it('is the same for the same seed', () => {
+    const run = (): string => {
+      const e = entry(50, 2, 2);
+      advanceEntry(e, 60 * 600, createRng(9));
+      return JSON.stringify(e);
+    };
+    expect(run()).toBe(run());
+  });
+
+  it('sends its roaming into the street when it comes back, as room allows, and nobody is lost', () => {
+    const world = windowWorld([0, 0], 800);
+    const g = createGame(world, { ...OPTIONS, capacity: 12 });
+    const ledger: Ledger = new Map();
+    const id = world.buildings[0].id;
+    ledger.set(id, { ...entry(5, 0, 0), roaming: 20 });
+    applyLedger(g, world, ledger);
+    expect(g.horde.alive).toBe(12); // the street is full
+    expect(ledger.get(id)?.roaming).toBe(8); // the rest wait their turn
+    for (let i = 0; i < g.horde.used; i++) {
+      if (g.horde.state[i] >= ZState.DEAD) continue;
+      const d = Math.hypot(g.horde.x[i] - g.outbreak.doorX[0], g.horde.y[i] - g.outbreak.doorY[0]);
+      expect(d).toBeLessThan(75);
+    }
+  });
+
+  it('is counted with the rest of the city', () => {
+    const world = windowWorld([0, 0], 800);
+    const ledger: Ledger = new Map();
+    ledger.set(world.buildings[0].id, entry(10, 1, 2)); // in the window: not counted as outside
+    ledger.set(999_001, { ...entry(30, 4, 5), roaming: 6 }); // elsewhere
+    ledger.set(999_002, entry(7, 0, 0));
+    expect(ledgerOutside(ledger, world)).toEqual({ healthy: 37, bitten: 4, zombies: 11 });
   });
 });
 
