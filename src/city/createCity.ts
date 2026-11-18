@@ -803,9 +803,26 @@ export async function createCityScene(
       { data: lampSet.data, stride: LAMP_STRIDE, count: lampSet.count, radius: 0.15 },
     ]);
     const landmark = map.towers.find((t) => t.height >= 100);
+    // With no landmark the survivor starts in the street nearest the middle of the map, not on
+    // whatever open ground the middle happens to be (in a town of courtyards, a bare back lot).
+    const nearestStreet = (): [number, number] => {
+      let best: [number, number] = [0, 0];
+      let bestD = Infinity;
+      for (const r of map.roads) {
+        if (!['residential', 'tertiary', 'secondary', 'primary'].includes(r.kind)) continue;
+        for (let i = 0; i < r.points.length; i += 2) {
+          const d = r.points[i] ** 2 + r.points[i + 1] ** 2;
+          if (d < bestD) {
+            bestD = d;
+            best = [r.points[i], r.points[i + 1]];
+          }
+        }
+      }
+      return best;
+    };
     const spawn = findSpawn(
       colliders,
-      near ?? (landmark ? [landmark.x, landmark.y] : [0, 0]),
+      near ?? (landmark ? [landmark.x, landmark.y] : nearestStreet()),
       200,
       near ? 1.5 : 5,
     );
