@@ -12,7 +12,7 @@
 import { moveCircleLong, type Colliders } from './colliders';
 import { OCC_BRIDGE, OCC_ROAD, occupancyAt } from './grid';
 import { nextFloat, nextRange, type Rng } from '../lib/rng';
-import { validSpot, type GameWorld } from './world';
+import { validSpot, type GameWorld, type WorldRoad } from './world';
 
 /**
  * A kind of car: what is found in the street, and what it can do. The shares are how the parked cars
@@ -380,8 +380,29 @@ export function parkCars(
   most = CAR.parkMost,
   keepOff?: (x: number, y: number) => boolean,
 ): Car[] {
+  return parkAlong(
+    world.roads,
+    world.colliders.half,
+    rng,
+    (x, y, radius) => validSpot(world, x, y, radius),
+    most,
+    keepOff,
+  );
+}
+
+/**
+ * Cars along `roads` within `half` of the origin, wherever `fits(x, y, radius)` says a car can stand
+ * (see `parkCars`; the tiles beyond the window use this with only an occupancy grid to go by).
+ */
+export function parkAlong(
+  roads: readonly WorldRoad[],
+  half: number,
+  rng: Rng,
+  fits: (x: number, y: number, radius: number) => boolean,
+  most = CAR.parkMost,
+  keepOff?: (x: number, y: number) => boolean,
+): Car[] {
   const cars: Car[] = [];
-  const half = world.colliders.half;
   // cars already parked, by cell of `parkApart` metres, so "is anything too near?" looks at nine cells
   const cell = CAR.parkApart;
   const apart2 = cell * cell;
@@ -398,11 +419,11 @@ export function parkCars(
     }
     return true;
   };
-  const roads = world.roads.filter((r) => r.width >= CAR.parkWidth && r.points.length >= 4);
+  const wide = roads.filter((r) => r.width >= CAR.parkWidth && r.points.length >= 4);
   // a slot every `parkSlot` metres along each kerb (both kerbs of a wide road), about half of them
   // taken, in a seeded order, so no part of the map is favoured
   const spots: [number, number, number][] = [];
-  for (const r of roads) {
+  for (const r of wide) {
     const offset = Math.max(0, r.width / 2 - 1.5); // a lane in from the edge, or the middle of a narrow road
     const sides = r.width >= CAR.parkBothFrom ? [1, -1] : [1];
     let along = nextFloat(rng) * CAR.parkSlot; // start at a random point on the first stretch
@@ -441,7 +462,7 @@ export function parkCars(
     if (Math.abs(x) > half - 12 || Math.abs(y) > half - 12) continue;
     if (keepOff?.(x, y)) continue;
     const kind = drawKind(rng);
-    if (!spaced(x, y) || !validSpot(world, x, y, KINDS[kind].radius + 0.4)) continue;
+    if (!spaced(x, y) || !fits(x, y, KINDS[kind].radius + 0.4)) continue;
     const car = createCar(x, y, heading, nextRange(rng, CAR.fuelFound[0], CAR.fuelFound[1]), kind);
     cars.push(car);
     const k = keyOf(x, y);

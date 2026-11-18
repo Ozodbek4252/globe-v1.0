@@ -56,6 +56,9 @@ const OUTDOORS: readonly (readonly [number, number])[] = [
   [24, 0.015],
 ];
 
+/** The most of them that are ever out (the evening): `outdoorShare` against this is "how busy the street is", 0 to 1. */
+export const OUTDOOR_PEAK: number = Math.max(...OUTDOORS.map(([, share]) => share));
+
 /** The share of the city's well people who are outdoors at this hour, from about 1.5% in the small hours to 14%. */
 export function outdoorShare(hour: number): number {
   const h = wrapHour(hour);

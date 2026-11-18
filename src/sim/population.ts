@@ -174,12 +174,15 @@ export function seedOutbreak(
   count: number,
   awayFrom: readonly [number, number],
   minDistance: number,
+  /** And no further than this (so the outbreak begins where the survivor will meet it, not across the map). */
+  maxDistance = Infinity,
 ): number[] {
   const chosen: number[] = [];
   for (let attempt = 0; attempt < 4000 && chosen.length < count; attempt++) {
     const b = Math.floor(nextFloat(rng) * o.count);
     if (o.healthy[b] < 6 || Number.isNaN(o.doorX[b])) continue;
-    if (Math.hypot(o.doorX[b] - awayFrom[0], o.doorY[b] - awayFrom[1]) < minDistance) continue;
+    const away = Math.hypot(o.doorX[b] - awayFrom[0], o.doorY[b] - awayFrom[1]);
+    if (away < minDistance || away > maxDistance) continue;
     if (chosen.some((c) => Math.hypot(o.doorX[c] - o.doorX[b], o.doorY[c] - o.doorY[b]) < 250))
       continue;
     chosen.push(b);

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {
+  computed,
   markRaw,
   nextTick,
   onBeforeUnmount,
@@ -70,6 +71,14 @@ const player = shallowRef<PlayerStatus | null>(null);
 
 // ---- a touch screen gets thumbsticks and buttons; sound is remembered per browser ----
 const touch = ref(wantsTouch(matchMedia('(pointer: coarse)').matches, location.search));
+/** The weather, for the time-of-day panel: nothing when it is clear or barely there. */
+const weatherLabel = computed(() => {
+  const w = player.value?.weather;
+  if (!w || w.intensity < 0.1) return '';
+  const heavy = w.intensity > 0.7;
+  if (w.kind === 'rain') return heavy ? ' · heavy rain' : ' · rain';
+  return heavy ? ' · thick fog' : ' · fog';
+});
 const SOUND_KEY = 'atlas-globe:sound';
 const soundOn = ref(readStored(SOUND_KEY) !== '0');
 function setSound(on: boolean): void {
@@ -144,6 +153,8 @@ function linkOptions(): {
   const density = number('density');
   if (density !== undefined && density > 0) game.density = Math.min(30000, density);
   if (q.get('cycle') === '0') game.cycle = false;
+  const weather = q.get('weather');
+  if (weather === 'rain' || weather === 'fog' || weather === 'clear') game.weather = weather;
   out.game = game;
   if (q.get('debug') === '1') out.debug = true;
   return out;
@@ -429,6 +440,15 @@ onBeforeUnmount(() => {
       >
         {{ (player?.sound ?? soundOn) ? '🔊' : '🔇' }}
       </button>
+      <button
+        v-if="player?.phase === 'playing'"
+        class="city-btn city-find"
+        type="button"
+        title="Point the camera at the nearest zombies (Z)"
+        @click="scene?.findZombies()"
+      >
+        ⌖ Zombies
+      </button>
 
       <button
         class="city-btn city-back"
@@ -462,7 +482,9 @@ onBeforeUnmount(() => {
           @input="onTime"
         />
         <output for="city-hour"
-          >{{ clock(hour) }} · sun {{ sunElevation >= 0 ? '+' : '' }}{{ sunElevation }}°</output
+          >{{ clock(hour) }} · sun {{ sunElevation >= 0 ? '+' : '' }}{{ sunElevation }}°{{
+            weatherLabel
+          }}</output
         >
         <span v-if="player && player.night > 0.5" class="city-night" role="status"
           >Night: the dead are restless{{
@@ -573,8 +595,8 @@ onBeforeUnmount(() => {
           </li>
           <li><kbd>Q</kbd><kbd>E</kbd> or right-drag: turn camera &nbsp; <kbd>Wheel</kbd> zoom</li>
           <li>
-            <kbd>V</kbd> free camera &nbsp; <kbd>H</kbd> recentre &nbsp; <kbd>P</kbd>
-            <kbd>Esc</kbd> pause
+            <kbd>V</kbd> free camera &nbsp; <kbd>Z</kbd> zombies &nbsp; <kbd>H</kbd> recentre &nbsp;
+            <kbd>P</kbd> <kbd>Esc</kbd> pause
           </li>
         </template>
         <template v-else>
@@ -699,6 +721,12 @@ onBeforeUnmount(() => {
   left: 204px;
   z-index: 2;
   min-width: 44px;
+}
+.city-find {
+  position: absolute;
+  top: 16px;
+  left: 260px;
+  z-index: 2;
 }
 /* a touch screen: the key list goes, and the bars sit above the thumbs */
 .cityview.touch .city-help {

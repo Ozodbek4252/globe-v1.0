@@ -70,6 +70,7 @@ import {
   type Car,
   kindOf,
 } from './vehicle';
+import { senses, weatherAt, type Weather, type WeatherKind } from './weather';
 import { validSpot, type GameWorld, type WorldRoad } from './world';
 
 // These used to live here; they are re-exported so the rest of the code does not care.
@@ -155,9 +156,14 @@ export const GAME = {
   /** Zombies in the streets at the start. None: the outbreak starts indoors, somewhere far off. */
   clumps: 0,
   outbreak: {
-    /** Buildings where it begins, and how far from the survivor at least (metres). */
+    /**
+     * Buildings where it begins, and how far from the survivor: at least this (metres), and at most
+     * that, so it begins where the survivor will meet it (in a big city the played window moves
+     * with them, and an outbreak begun across the map was left behind unseen).
+     */
     patients: 3,
     minDistance: 350,
+    maxDistance: 700,
     /** Of those who turn, the share that are runners. */
     runners: 0.12,
     /** Real-world people per square kilometre to spread over the city (Tashkent: about 2.6 million over 335 km²). */
@@ -391,6 +397,8 @@ export interface GameOptions {
   /** When the sun rises and sets over this place, in hours; they say when the night is. */
   sunrise?: number;
   sunset?: number;
+  /** Fix the weather for the whole game (a link, a test); otherwise it comes and goes with the seed. */
+  weather?: WeatherKind;
 }
 
 export interface GameStats {
@@ -469,6 +477,10 @@ export interface GameState {
   sunrise: number;
   sunset: number;
   night: number;
+  /** The weather now (see weather.ts): a function of the seed and the time, kept here for everyone to read. */
+  weather: Weather;
+  weatherSeed: number;
+  forcedWeather: WeatherKind | null;
   /** Where the next person sent home is looked for (so it is not always the same people). */
   homeCursor: number;
   /** Seconds since the population was last counted. */
@@ -605,6 +617,9 @@ export function createGame(world: GameWorld, options: GameOptions): GameState {
     sunrise,
     sunset,
     night: nightness(startHour, sunrise, sunset),
+    weather: weatherAt(0, options.seed, options.weather ?? null),
+    weatherSeed: options.seed,
+    forcedWeather: options.weather ?? null,
     homeCursor: 0,
     countTimer: 0,
     radarOn: false,
@@ -629,6 +644,7 @@ export function createGame(world: GameWorld, options: GameOptions): GameState {
     options.patients ?? GAME.outbreak.patients,
     [options.startX, options.startY],
     GAME.outbreak.minDistance,
+    GAME.outbreak.maxDistance,
   );
   countPopulation(g);
   return g;
@@ -768,6 +784,7 @@ function hurt(g: GameState, amount: number, fromX: number, fromY: number): void 
 /** Advance the game by `dt` seconds (keep it small, ideally 1/60). */
 export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: number): void {
   g.tick++;
+  g.weather = weatherAt(g.tick / 60, g.weatherSeed, g.forcedWeather);
   const colliders = world.colliders;
   const playing = g.status === 'playing';
 
@@ -883,6 +900,8 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
       targets: g.targets,
       noises: g.noises,
       night: g.night,
+      sight: senses(g.weather).sight,
+      hearing: senses(g.weather).hearing,
     },
     dt,
     g.tick,
@@ -1080,7 +1099,11 @@ export function stepRoutine(g: GameState, world: GameWorld): void {
   if (o.count === 0 || humans.capacity === 0) return;
   const p = g.population;
   const calm = 1 - 0.9 * fear(p.zombies, p.initial);
-  const want = Math.min(humans.capacity, Math.round(outdoorShare(g.clock) * calm * p.healthy));
+  // fewer are out at night, in a frightened city, and in the rain
+  const want = Math.min(
+    humans.capacity,
+    Math.round(outdoorShare(g.clock) * calm * senses(g.weather).outdoors * p.healthy),
+  );
   const have = humans.alive;
 
   if (have < want) {

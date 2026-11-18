@@ -33,7 +33,7 @@ import {
 import { createEmitter, type Unsubscribe } from '../lib/emitter';
 import { utcOffsetHours } from '../lib/sun';
 import { buildColliders, findSpawn, type Colliders } from '../sim/colliders';
-import { DAY, nightness, wrapHour } from '../sim/daylight';
+import { DAY, nightness, OUTDOOR_PEAK, outdoorShare, wrapHour } from '../sim/daylight';
 import {
   countPopulation,
   createGame,
@@ -72,7 +72,11 @@ import { sceneryTiles, tileAt, tileBounds, tileKey, type TileIndex } from './til
 import type { PlaceKind } from '../sim/places';
 import { compassName, screenAngle, screenOffset } from './bearings';
 import { createCarRenderer } from './cars';
+import { createRain } from './rain';
+import { createShamblers, createWalkers, LIFE, parkInTile, type Door } from './sceneryLife';
 import { createSoundScape, type Groaner } from './sound';
+import { weatherFog, weatherPalette } from './weatherLook';
+import { senses, type Weather, type WeatherKind } from '../sim/weather';
 import { nextWeapon, NO_TOUCH, type TouchAction, type TouchInput } from './touch';
 import { createSurvivor } from './character';
 import { createCutaway, type Cutaway } from './cutaway';
@@ -205,10 +209,23 @@ export interface PlayerStatus {
   car: { kind: string; speed: number; fuel: number; condition: number; wrecked: boolean } | null;
   /** Sound is on (M toggles it). */
   sound: boolean;
+  /** The weather now. */
+  weather: Weather;
   /** The radar is on: the minimap is available. */
   radarOn: boolean;
   /** The next goal, how far off it is, and where it lies on the screen (radians clockwise from up). */
   objective: { text: string; distance: number; angle: number; compass: string } | null;
+  /**
+   * Where the nearest of the dead are, when none is near: in the street, inside a building here, or
+   * beyond the window in a big city. Null when they are near (you can see them) or there are none.
+   */
+  threat: {
+    text: string;
+    distance: number;
+    angle: number;
+    compass: string;
+    where: 'street' | 'inside' | 'beyond';
+  } | null;
   /** Which shelter the survivor is hiding in, and how much of its door is left (0 to 1); null outdoors. */
   inside: { name: string; door: number } | null;
 }
@@ -349,6 +366,8 @@ export interface CityDebug {
 /** Setting up a game: all optional (a random game by default). Handy for sharing and for tests. */
 export interface GameSetup {
   seed?: number;
+  /** Fix the weather (`?weather=rain|fog|clear`); otherwise it comes and goes with the seed. */
+  weather?: WeatherKind;
   /** Groups of zombies in the streets at the start (0 for none). */
   zombies?: number;
   /** False to stop the clock where it is, for a still day: the time of day stays what `hour` says. */
@@ -413,6 +432,8 @@ export interface CityScene {
   setTouch(input: TouchInput | null): void;
   /** A touch button was pressed. */
   touchPress(action: TouchAction): void;
+  /** Point the free camera at the nearest of the dead (in the street, indoors, or beyond the window). False when there are none. */
+  findZombies(): boolean;
   /** Fires about twice a second. */
   onStats(listener: (stats: CityStats) => void): Unsubscribe;
   /** Fires about ten times a second with the survivor's condition. */
@@ -723,6 +744,20 @@ export async function createCityScene(
   interface Scenery {
     group: Group;
     setGlow(amount: number): void;
+    /**
+     * Move the tile's people and its turned, and draw them. `share` (0 to 1) is how many of its
+     * people are out; the focus is where the camera looks, in the tile's own coordinates.
+     */
+    tick(
+      dt: number,
+      seconds: number,
+      share: number,
+      focusX: number,
+      focusY: number,
+      distance: number,
+    ): void;
+    /** The turned the ledger says roam this tile, by door (tile coordinates). */
+    roam(doors: readonly Door[]): void;
     dispose(): void;
   }
 
@@ -739,9 +774,29 @@ export async function createCityScene(
     const lamps = buildLampMeshes(placeLamps(map, occupancy), glowTexture, keep);
     group.add(lamps.group);
     group.add(buildTreeMeshes(placeTrees(map, occupancy), keep, cutaway));
+    // life: cars at the kerbs, people on the pavements, the turned the ledger puts here (none yet)
+    const [ox, oy] = map.origin ?? [0, 0];
+    const seed = (Math.round(ox * 7 + oy * 131) ^ 0x51ce) >>> 0;
+    const parked = parkInTile(map.roads, map.halfSize, occupancy, seed);
+    const cars = keep(createCarRenderer(Math.max(1, parked.length)));
+    cars.update(parked, -1, 0, 0, 0, false);
+    group.add(cars.object);
+    const walkers = createWalkers(map.roads, seed);
+    const folk = keep(createPeopleRenderer(Math.max(1, walkers.count)));
+    group.add(folk.object);
+    const shamblers = createShamblers(seed);
+    const dead = keep(createZombieRenderer(LIFE.shamblersMost));
+    group.add(dead.object);
     return {
       group,
       setGlow: (amount) => lamps.setGlow(amount),
+      tick(dt, seconds, share, focusX, focusY, distance) {
+        walkers.step(dt, share);
+        shamblers.step(dt);
+        folk.update(walkers.humans, seconds, distance, focusX, focusY);
+        dead.update(shamblers.horde, dt, focusX, focusY, distance);
+      },
+      roam: (doors) => shamblers.set(doors),
       dispose() {
         for (const d of owned) d.dispose();
       },
@@ -888,6 +943,8 @@ export async function createCityScene(
     built: Scenery | null;
     /** No longer wanted: whatever arrives for it is thrown away. */
     dropped: boolean;
+    /** The share of its people still well, as the ledger has it (1 when the ledger knows nothing of it). */
+    health: number;
   }
   const scenery = new Map<string, SceneryTile>();
   let repaired = 0;
@@ -920,6 +977,7 @@ export async function createCityScene(
     cycle: setup.cycle,
     sunrise: sunToday?.sunrise,
     sunset: sunToday?.sunset,
+    weather: setup.weather,
   });
   // a saved game is taken up once, where it left off; a restart after that is a new game
   let resume = isSavedGame(setup.resume) ? setup.resume : null;
@@ -1051,6 +1109,10 @@ export async function createCityScene(
 
   // ---------- time of day ----------
   let hour = startHour;
+  /** The weather the picture was last set for (the sky is redone when it changes enough). */
+  let shownWeather: Weather = { kind: 'clear', intensity: 0 };
+  const rain = createRain();
+  scene.add(rain.object);
   let elevation = 0;
   let darkness = 0; // 0 in daylight, 1 at night: drives the flashlight and the glow
   // The moon tonight: some games are lit by a full one, some have none at all. It follows the seed
@@ -1065,7 +1127,10 @@ export async function createCityScene(
     const date = REFERENCE_DAY + (hour - utcOffsetHours(data.center[0])) * 3_600_000;
     const angles = localSun(date, data.center[0], data.center[1]);
     elevation = angles.elevation;
-    const palette = skyPalette(angles.elevation, moon);
+    const palette = weatherPalette(skyPalette(angles.elevation, moon), game.weather);
+    const fogNow = weatherFog(game.weather);
+    fog.near = fogNow.near;
+    fog.far = fogNow.far;
     // The light is the sun by day and shifts to a high "moon" at night, so shadows stay sensible.
     const night = smoothstep(8, -4, angles.elevation);
     const lightAngles = {
@@ -1166,6 +1231,7 @@ export async function createCityScene(
     } else if (k === 'v') setCameraMode(cameraMode === 'follow' ? 'free' : 'follow');
     else if (k === 'l') flashlightPref = flashlightOn() ? 'off' : 'on';
     else if (k === 'm') sounds.setEnabled(!sounds.enabled());
+    else if (k === 'z') findZombies();
     else if (k === 't' && tower) {
       setCameraMode('free');
       goal = { ...goal, x: tower.x, z: -tower.y + 40 };
@@ -1511,6 +1577,80 @@ export async function createCityScene(
   const SCENERY_KEEP = 1;
   let sceneryBusy = false;
   let sceneryAt = 0;
+  let lifeAt = 0;
+  /** What the ledger says of each scenery tile: who roams its streets, and how many of its people are left. */
+  function roamScenery(): void {
+    if (!tiled) return;
+    const size = tiled.index.tileSize;
+    const half = size / 2;
+    for (const s of scenery.values()) {
+      if (!s.built) continue;
+      const ox = s.tx * size - origin[0];
+      const oy = s.ty * size - origin[1];
+      const doors: Door[] = [];
+      let well = 0;
+      let all = 0;
+      for (const e of ledger.values()) {
+        if (Number.isNaN(e.x)) continue;
+        const x = e.x - ox;
+        const y = e.y - oy;
+        if (Math.abs(x) > half || Math.abs(y) > half) continue;
+        well += e.healthy;
+        all += e.healthy + e.incubating + e.undead + e.roaming;
+        if (e.roaming > 0) doors.push({ x, y, count: e.roaming });
+      }
+      s.health = all > 0 ? well / all : 1;
+      s.built.roam(doors);
+    }
+  }
+
+  // ---------- finding the dead: where the nearest of them are, for the HUD and the Z key ----------
+  interface Threat {
+    x: number;
+    y: number;
+    where: 'street' | 'inside' | 'beyond';
+    text: string;
+  }
+  /** The nearest of the dead to the survivor: in the street, else inside a building here, else beyond the window. */
+  function nearestThreat(): Threat | null {
+    const px = player.x;
+    const py = player.y;
+    let best: Threat | null = null;
+    let bestD = Infinity;
+    const consider = (x: number, y: number, where: Threat['where'], text: string): void => {
+      const d = (x - px) ** 2 + (y - py) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = { x, y, where, text };
+      }
+    };
+    const h = game.horde;
+    for (let i = 0; i < h.used; i++) {
+      if (h.state[i] >= ZState.DEAD) continue;
+      consider(h.x[i], h.y[i], 'street', 'Zombies');
+    }
+    if (best) return best;
+    const o = game.outbreak;
+    for (let b = 0; b < o.count; b++) {
+      if (o.undead[b] + o.incubating[b] === 0 || Number.isNaN(o.doorX[b])) continue;
+      consider(o.doorX[b], o.doorY[b], 'inside', 'The outbreak, indoors');
+    }
+    if (best) return best;
+    for (const e of ledger.values()) {
+      if (Number.isNaN(e.x) || e.undead + e.incubating + e.roaming === 0) continue;
+      consider(e.x, e.y, 'beyond', 'The outbreak, beyond the window');
+    }
+    return best;
+  }
+  /** Point the free camera at the nearest of the dead. Returns false when there are none anywhere. */
+  function findZombies(): boolean {
+    const t = nearestThreat();
+    if (!t) return false;
+    setCameraMode('free');
+    goal = { ...goal, x: t.x, z: -t.y, distance: Math.min(goal.distance, 140) };
+    introUntil = 0;
+    return true;
+  }
   /** Put each built tile where its centre is in the window's coordinates. */
   function placeScenery(): void {
     if (!tiled) return;
@@ -1541,7 +1681,7 @@ export async function createCityScene(
     for (const [tx, ty] of sceneryTiles(looking, centre, 1)) {
       const key = tileKey(tx, ty);
       if (tileExists.has(key) && !scenery.has(key)) {
-        scenery.set(key, { tx, ty, loading: false, built: null, dropped: false });
+        scenery.set(key, { tx, ty, loading: false, built: null, dropped: false, health: 1 });
       }
     }
     void pumpScenery();
@@ -1704,8 +1844,14 @@ export async function createCityScene(
       cityPopulation();
     }
     // the sky follows the game's clock, however it was set (it changes in steps of about a minute)
-    if (Math.abs(game.clock - hour) > 0.015) {
+    const weatherNow = game.weather;
+    if (
+      Math.abs(game.clock - hour) > 0.015 ||
+      weatherNow.kind !== shownWeather.kind ||
+      Math.abs(weatherNow.intensity - shownWeather.intensity) > 0.03
+    ) {
       hour = game.clock;
+      shownWeather = weatherNow;
       applyTime();
     }
     gamePhase = game.status;
@@ -1750,12 +1896,17 @@ export async function createCityScene(
       walking: drivenCar ? 0 : speedOf(player) > 1.2 ? (player.sprinting ? 2 : 1) : 0,
       health: game.health,
       night: darkness,
+      rain: game.weather.kind === 'rain' ? game.weather.intensity : 0,
       inside: game.inside >= 0,
       playing: gamePhase === 'playing' && !paused && !debugFrozen,
     });
     if (tiled && now - sceneryAt >= 300) {
       sceneryAt = now;
       watchScenery();
+    }
+    if (tiled && scenery.size > 0 && now - lifeAt >= 2000) {
+      lifeAt = now;
+      roamScenery();
     }
     const alpha = simClock / SIM_STEP;
     const px = lerp(previous.x, player.x, alpha);
@@ -1821,6 +1972,31 @@ export async function createCityScene(
     cars.update(game.cars, game.driving, px, py, player.heading, lit);
     zombies.update(game.horde, simDt, current.x, -current.z, current.distance);
     people.update(game.humans, now / 1000, current.distance, current.x, -current.z);
+    // life in the tiles beyond the window, where the free camera looks
+    if (scenery.size > 0 && tiled) {
+      // how busy the pavements are: the hour's share of people out against the busiest hour's
+      const share = (outdoorShare(game.clock) / OUTDOOR_PEAK) * senses(game.weather).outdoors;
+      const size = tiled.index.tileSize;
+      for (const s of scenery.values()) {
+        if (!s.built) continue;
+        const ox = s.tx * size - origin[0];
+        const oy = s.ty * size - origin[1];
+        s.built.tick(
+          simDt,
+          now / 1000,
+          share * s.health,
+          current.x - ox,
+          -current.z - oy,
+          current.distance,
+        );
+      }
+    }
+    rain.update(
+      current.x,
+      current.z,
+      simDt,
+      game.weather.kind === 'rain' ? game.weather.intensity : 0,
+    );
     pickupMarkers.sync(game.pickups, now / 1000, darkness);
     // a place that is used up, or a shelter whose door has gone, fades
     for (let i = 0; i < markerSpent.length; i++) markerSpent[i] = game.used[i] || game.breached[i];
@@ -1850,7 +2026,11 @@ export async function createCityScene(
       const here = interactionAt(game, gameWorld);
 
       // the next goal: power up the radar, then whatever the survivor is short of
-      const pointAt = (text: string, x: number, y: number): PlayerStatus['objective'] => ({
+      const pointAt = (
+        text: string,
+        x: number,
+        y: number,
+      ): NonNullable<PlayerStatus['objective']> => ({
         text,
         distance: Math.hypot(x - player.x, y - player.y),
         angle: screenAngle(current.yaw, x - player.x, y - player.y),
@@ -1882,6 +2062,12 @@ export async function createCityScene(
         } else if (armory) {
           objective = pointAt('Find the armory', armory.x, armory.y);
         }
+      }
+      // where the dead are, for a survivor who cannot see any
+      let threat: PlayerStatus['threat'] = null;
+      if (gamePhase === 'playing' && near === 0) {
+        const t = nearestThreat();
+        if (t) threat = { ...pointAt(t.text, t.x, t.y), where: t.where };
       }
 
       // the radar scope: everything within range, turned so that "up" is ahead of the camera
@@ -1958,7 +2144,9 @@ export async function createCityScene(
             : null,
         radarOn: game.radarOn,
         sound: sounds.enabled(),
+        weather: game.weather,
         objective,
+        threat,
         inside:
           game.inside >= 0
             ? {
@@ -2061,6 +2249,7 @@ export async function createCityScene(
       if (input) sounds.unlock();
     },
     touchPress,
+    findZombies,
     onStats: stats.on,
     onPlayer: playerEvents.on,
     onGame: notices.on,
@@ -2292,6 +2481,7 @@ export async function createCityScene(
       cancelAnimationFrame(frameId);
       resizeObserver.disconnect();
       sounds.dispose();
+      rain.dispose();
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);

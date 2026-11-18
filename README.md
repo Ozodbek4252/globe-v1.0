@@ -265,6 +265,21 @@ behind a door works, but it does not win the game.
   walks (at the wheel it is the pedal and the wheel), the right one aims and, pushed far, fires;
   buttons for the door or car, reload, shove, run, the next gun and the light. Drag the city to turn
   the camera, pinch to zoom. `?touch=1` forces them on a desktop, `?touch=0` off.
+- **Weather.** Spells of rain and fog come and go with the seed (about ten minutes each, a quarter of
+  them rain, a fifth fog), fading in and out over a minute, and a saved game has the same sky when
+  you come back. Rain greys the sky, dulls the horde's eyes a little and its ears a lot (every noise
+  carries less), keeps most people indoors, and is heard. Fog closes the view down to a few hundred
+  metres for everyone: the horde sees a third as far, and so do you. The time-of-day panel names it.
+  `?weather=rain|fog|clear` fixes it.
+- **Beyond the window.** In a big city the free camera can fly past the played window, and the tiles
+  it looks at are drawn as they are on the map, with life in them: people strolling the pavements,
+  cars at the kerbs, and, where the outbreak has been, the turned the city's ledger says roam there,
+  drifting about the doors they came out of; the streets empty as a tile's people are lost. None of
+  it is played (no senses, no counts), it is the city going on where nobody is looking.
+- **Finding the horde.** When no zombie is within 40 m, a red line under the clock points to the
+  nearest of them: in the street, inside a building ("the outbreak, indoors"), or beyond the played
+  window. `Z`, or the **⌖ Zombies** button, swings the free camera there. The outbreak begins between
+  350 and 700 m of where you start, so you meet it rather than leave it behind.
 
 **Staying fed.** Hunger drains steadily; at zero you starve and nothing heals. Food crates and first aid
 lie about the streets, shops and clinics have more, and kills sometimes drop some.

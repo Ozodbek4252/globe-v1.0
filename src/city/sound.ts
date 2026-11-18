@@ -40,6 +40,8 @@ export interface SoundFrame {
   health: number;
   /** How dark it is, 0 to 1. */
   night: number;
+  /** How hard it rains, 0 to 1 (absent: not at all). */
+  rain?: number;
   /** Behind a shelter's door. */
   inside: boolean;
   /** The game is running (not paused, not over): otherwise everything that goes on goes quiet. */
@@ -80,7 +82,7 @@ export interface SoundScape {
   /** Silence everything that goes on (the engine, the wind) at once: the scene is going to sleep. */
   hush(): void;
   /** The levels the continuous layers are at (0 to 1), for tests and tuning. */
-  levels(): { engine: number; horde: number; wind: number };
+  levels(): { engine: number; horde: number; wind: number; rain: number };
   dispose(): void;
 }
 
@@ -128,7 +130,8 @@ export function createSoundScape(make: () => Ctx | null = defaultContext): Sound
   let engine: Engine | null = null;
   let horde: GainNode | null = null;
   let wind: GainNode | null = null;
-  const level = { engine: 0, horde: 0, wind: 0 };
+  let rain: GainNode | null = null;
+  const level = { engine: 0, horde: 0, wind: 0, rain: 0 };
   let groanIn = 0.6;
   let stepIn = 0;
   let beatIn = 0;
@@ -186,6 +189,18 @@ export function createSoundScape(make: () => Ctx | null = defaultContext): Sound
     hordeFilter.frequency.value = 160;
     hordeSrc.connect(hordeFilter).connect(horde).connect(world);
     hordeSrc.start();
+    // rain: looped noise, brighter than the wind, through the world (a door muffles it)
+    rain = c.createGain();
+    rain.gain.value = 0;
+    const rainSrc = c.createBufferSource();
+    rainSrc.buffer = noiseBuffer;
+    rainSrc.loop = true;
+    rainSrc.playbackRate.value = 0.9;
+    const rainFilter = c.createBiquadFilter();
+    rainFilter.type = 'lowpass';
+    rainFilter.frequency.value = 1800;
+    rainSrc.connect(rainFilter).connect(rain).connect(world);
+    rainSrc.start();
   }
 
   const ready = (): boolean => ctx !== null && on && !disposed;
@@ -637,6 +652,9 @@ export function createSoundScape(make: () => Ctx | null = defaultContext): Sound
       const windLevel = quiet ? 0 : f.inside ? 0.015 : 0.045 + 0.025 * f.night;
       if (wind) setTarget(wind.gain, windLevel, 0.5);
       level.wind = windLevel;
+      const rainLevel = quiet ? 0 : 0.12 * (f.rain ?? 0);
+      if (rain) setTarget(rain.gain, rainLevel, 0.6);
+      level.rain = rainLevel;
       if (quiet) return;
       // voices
       if (f.groaners.length > 0) {
@@ -681,12 +699,12 @@ export function createSoundScape(make: () => Ctx | null = defaultContext): Sound
         engine.road.gain.cancelScheduledValues(now());
         engine.road.gain.value = 0;
       }
-      for (const g of [horde, wind]) {
+      for (const g of [horde, wind, rain]) {
         if (!g) continue;
         g.gain.cancelScheduledValues(now());
         g.gain.value = 0;
       }
-      level.engine = level.horde = level.wind = 0;
+      level.engine = level.horde = level.wind = level.rain = 0;
     },
     levels: () => ({ ...level }),
     dispose() {

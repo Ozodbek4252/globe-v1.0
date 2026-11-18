@@ -154,10 +154,10 @@ describe('the sound of the city', () => {
     expect(s.levels().horde).toBeGreaterThan(0.1);
     expect(s.levels().wind).toBeGreaterThan(0);
     s.update({ ...quiet, near: 10, playing: false });
-    expect(s.levels()).toEqual({ engine: 0, horde: 0, wind: 0 });
+    expect(s.levels()).toEqual({ engine: 0, horde: 0, wind: 0, rain: 0 });
     s.update({ ...quiet, near: 10 });
     s.hush();
-    expect(s.levels()).toEqual({ engine: 0, horde: 0, wind: 0 });
+    expect(s.levels()).toEqual({ engine: 0, horde: 0, wind: 0, rain: 0 });
   });
 
   it('groans come from the zombies near, and steps and the heart from the survivor', () => {
@@ -179,7 +179,7 @@ describe('the sound of the city', () => {
     s.unlock();
     everything(s);
     s.update(quiet);
-    expect(s.levels()).toEqual({ engine: 0, horde: 0, wind: 0 });
+    expect(s.levels()).toEqual({ engine: 0, horde: 0, wind: 0, rain: 0 });
     s.dispose();
   });
 });

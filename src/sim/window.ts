@@ -75,8 +75,8 @@ export type Ledger = Map<number, LedgerEntry>;
  */
 export const SPREAD = {
   /** How far the roaming look for the next door with people behind it (metres), and over how many they split. */
-  reach: 70,
-  fanout: 2,
+  reach: 80,
+  fanout: 3,
   /** How many fit at one door; what each does to it per second; how many bites each lands per second once it is open. */
   atDoor: 6,
   blow: 8,

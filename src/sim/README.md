@@ -8,24 +8,25 @@ decide anything.
 
 City scale (a survivor, a city of people, a horde, a clock), all in metres, x east and y north:
 
-| File            | What it does                                                                                               |
-| --------------- | ---------------------------------------------------------------------------------------------------------- |
-| `grid.ts`       | A square grid of what covers each cell (building, road, water, tree, bridge)                               |
-| `colliders.ts`  | Walls and round obstacles in a spatial hash; `moveCircle` slides along them; water and spawns              |
-| `raycast.ts`    | Walk a ray through the walls: line of sight, and where a bullet stops                                      |
-| `flow.ts`       | A walkability grid and a flow field, so a chaser walks around buildings to reach the survivor              |
-| `spatial.ts`    | A flat grid index for "who is near here?" over thousands of moving points                                  |
-| `world.ts`      | What every game on a map shares (walls, walkable ground, buildings, places), "can someone stand here?"     |
-| `places.ts`     | Picks real buildings for jobs (radar, shelters, supplies, armory) from size, height, kind; the doors       |
-| `player.ts`     | The survivor: walking, sprinting, stamina, aiming (one step at a time)                                     |
-| `vehicle.ts`    | Cars: parked along the roads, driven (steering, roads, walls, crashes), running down whoever is in the way |
-| `horde.ts`      | Thousands of zombies: eyes, ears and nose; wander, investigate, chase, attack; other targets               |
-| `population.ts` | The city's people, counted per building (well, bitten, turned), and the outbreak inside each one           |
-| `daylight.ts`   | The clock: how dark it is at each hour, how many people are out, how frightened the city is                |
-| `humans.ts`     | The few percent of people in the street, as individuals: stroll, flee, go indoors, get bitten, turn        |
-| `game.ts`       | One game: two guns, noise, supplies, hunger, shelters, the outbreak, the clock, losing, events             |
-| `save.ts`       | A game as plain data, written out and read back exactly                                                    |
-| `window.ts`     | Carrying a game into the next window of a big city: shift, fold, and a ledger of buildings by id           |
+| File            | What it does                                                                                                 |
+| --------------- | ------------------------------------------------------------------------------------------------------------ |
+| `grid.ts`       | A square grid of what covers each cell (building, road, water, tree, bridge)                                 |
+| `colliders.ts`  | Walls and round obstacles in a spatial hash; `moveCircle` slides along them; water and spawns                |
+| `raycast.ts`    | Walk a ray through the walls: line of sight, and where a bullet stops                                        |
+| `flow.ts`       | A walkability grid and a flow field, so a chaser walks around buildings to reach the survivor                |
+| `spatial.ts`    | A flat grid index for "who is near here?" over thousands of moving points                                    |
+| `world.ts`      | What every game on a map shares (walls, walkable ground, buildings, places), "can someone stand here?"       |
+| `places.ts`     | Picks real buildings for jobs (radar, shelters, supplies, armory) from size, height, kind; the doors         |
+| `player.ts`     | The survivor: walking, sprinting, stamina, aiming (one step at a time)                                       |
+| `vehicle.ts`    | Cars: parked along the roads, driven (steering, roads, walls, crashes), running down whoever is in the way   |
+| `horde.ts`      | Thousands of zombies: eyes, ears and nose; wander, investigate, chase, attack; other targets                 |
+| `population.ts` | The city's people, counted per building (well, bitten, turned), and the outbreak inside each one             |
+| `daylight.ts`   | The clock: how dark it is at each hour, how many people are out, how frightened the city is                  |
+| `humans.ts`     | The few percent of people in the street, as individuals: stroll, flee, go indoors, get bitten, turn          |
+| `game.ts`       | One game: two guns, noise, supplies, hunger, shelters, the outbreak, the clock, losing, events               |
+| `save.ts`       | A game as plain data, written out and read back exactly                                                      |
+| `window.ts`     | Carrying a game into the next window of a big city: shift, fold, and a ledger of buildings by id             |
+| `weather.ts`    | Rain and fog in spells, a pure function of the seed and the time; what they do to sight, hearing, the street |
 
 In a tiled city the ledger is the rest of the city. A building's entry keeps its people, its door,
 where it stands (in the window's coordinates; the whole ledger moves with the window), its place

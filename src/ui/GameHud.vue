@@ -6,6 +6,10 @@ import { fmtClock } from '../lib/format';
 const props = defineProps<{ player: PlayerStatus | null }>();
 /** `restart`: carry on in the same city (a new survivor after dying); `fresh`: a new city altogether. */
 const emit = defineEmits<{ restart: []; fresh: []; close: []; resume: [] }>();
+
+/** A distance as people say it: metres up close, kilometres with one decimal further off. */
+const far = (d: number): string =>
+  d >= 1000 ? `${(d / 1000).toFixed(1)} km` : `${Math.round(d)} m`;
 const resumeButton = useTemplateRef<HTMLButtonElement>('resumeButton');
 
 // when the pause menu opens, put the keyboard on "Resume"
@@ -239,6 +243,16 @@ const accuracy = computed(() =>
           >
           {{ player.objective.text }} · {{ Math.round(player.objective.distance) }} m
           {{ player.objective.compass }}
+        </span>
+        <span v-if="player.threat" class="hud-objective hud-threat">
+          <span
+            class="hud-arrow"
+            aria-hidden="true"
+            :style="{ transform: `rotate(${player.threat.angle}rad)` }"
+            >▲</span
+          >
+          {{ player.threat.text }} · {{ far(player.threat.distance) }} {{ player.threat.compass }}
+          <kbd>Z</kbd> look
         </span>
       </div>
 
@@ -644,6 +658,13 @@ const accuracy = computed(() =>
 }
 
 /* ---- the pistol */
+.hud-threat {
+  color: #ffb9ad;
+}
+.hud-threat kbd {
+  margin-left: 6px;
+}
+
 .hud-ammo {
   position: absolute;
   right: 16px;

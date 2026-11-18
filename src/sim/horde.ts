@@ -192,6 +192,9 @@ export interface HordeContext {
   noises: readonly Noise[];
   /** How dark it is, 0 (day, the default) to 1 (night): see `NIGHT`. */
   night?: number;
+  /** The weather: what is left of how far they see, and of how far a noise is heard (1, the default, is clear). */
+  sight?: number;
+  hearing?: number;
 }
 
 interface HordeGrid {
@@ -531,12 +534,13 @@ function perceive(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number
   const d = Math.sqrt(d2);
   const interval = dt * ZOMBIE.perceptionEvery;
   const night = ctx.night ?? 0;
-  const keen = 1 + NIGHT.hearing * night;
+  const keen = (1 + NIGHT.hearing * night) * (ctx.hearing ?? 1);
+  const sight = ctx.sight ?? 1;
 
   let aware = false;
   h.clear[i] = 0;
   if (ctx.playerAlive && !ctx.hidden) {
-    const range = s === ZState.CHASE ? ZOMBIE.chaseSight : ZOMBIE.sight;
+    const range = (s === ZState.CHASE ? ZOMBIE.chaseSight : ZOMBIE.sight) * sight;
     if (d < range) {
       const clear = lineOfSight(ctx.world, x, y, ctx.px, ctx.py);
       h.clear[i] = clear ? 1 : 0;
@@ -579,7 +583,7 @@ function perceive(h: Horde, i: number, ctx: HordeContext, d2: number, dt: number
 
   // not aware of the survivor: is there someone else worth going for?
   if (targets) {
-    const reach = s === ZState.CHASE ? ZOMBIE.targetNear : ZOMBIE.targetSight;
+    const reach = (s === ZState.CHASE ? ZOMBIE.targetNear : ZOMBIE.targetSight) * sight;
     probe.world = ctx.world;
     probe.x = x;
     probe.y = y;
