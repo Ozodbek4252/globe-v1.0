@@ -53,6 +53,23 @@ export function keepInside(rig: Rig, half: number, margin = 40): Rig {
   return { ...rig, x: clamp(rig.x, -limit, limit), z: clamp(rig.z, -limit, limit) };
 }
 
+/** A box on the ground in Three.js space (x east, z south). */
+export interface Box {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+/** Keep the target inside a box (a little beyond its edges): the whole of a city in tiles. */
+export function keepInBox(rig: Rig, box: Box, margin = 40): Rig {
+  return {
+    ...rig,
+    x: clamp(rig.x, box.minX - margin, box.maxX + margin),
+    z: clamp(rig.z, box.minZ - margin, box.maxZ + margin),
+  };
+}
+
 const shortestAngle = (from: number, to: number): number => {
   let d = (to - from) % (Math.PI * 2);
   if (d > Math.PI) d -= Math.PI * 2;

@@ -7,6 +7,7 @@ import {
   cameraPosition,
   ease,
   groundAxes,
+  keepInBox,
   keepInside,
   metresPerPixel,
   pan,
@@ -158,6 +159,10 @@ describe('camera rig', () => {
       x: 1040,
       z: -1040,
     });
+    const box = { minX: -3000, maxX: 500, minZ: -200, maxZ: 9000 };
+    expect(keepInBox({ ...rig, x: 5000, z: -5000 }, box, 40)).toMatchObject({ x: 540, z: -240 });
+    expect(keepInBox({ ...rig, x: -9000, z: 50000 }, box)).toMatchObject({ x: -3040, z: 9040 });
+    expect(keepInBox({ ...rig, x: -100, z: 100 }, box)).toMatchObject({ x: -100, z: 100 });
   });
 
   it('eases to the goal without overshooting, at any frame rate', () => {

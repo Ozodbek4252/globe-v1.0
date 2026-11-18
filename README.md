@@ -122,7 +122,9 @@ turns to it) and its card shows how many people live there, the longest you have
 here**. Tashkent is the whole city: 313,000 buildings cut into 1 km tiles that the game loads around
 you as you go (a note under the clock says when the next part is being built). The outbreak goes on in
 the parts you are not in, and the horde and the people come with you across the seams; the city's
-numbers at the top count everything the game has seen. The other places are a real district each, a square 1.2 to 1.8 km across: Paris around
+numbers at the top count everything the game has seen. The game is played in a 3 km window around
+you; the free camera can fly over the whole city, and the tiles it looks at beyond the window are
+drawn as they are on the map (streets, trees, lamps, nobody about) and let go when it moves on. The other places are a real district each, a square 1.2 to 1.8 km across: Paris around
 the Eiffel Tower, Tokyo Tower and Shiba, Midtown Manhattan, downtown Cairo, London at Tower Bridge,
 Sydney's Circular Quay, and Oia, a village on Santorini. A crowd is sized from
 each place's own density of people (a rough public figure, in `public/cities/index.json`).

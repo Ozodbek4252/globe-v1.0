@@ -67,7 +67,7 @@ import {
   type Ledger,
   type LedgerEntry,
 } from '../sim/window';
-import { tileAt, type TileIndex } from './tiles';
+import { sceneryTiles, tileAt, tileBounds, tileKey, type TileIndex } from './tiles';
 import type { PlaceKind } from '../sim/places';
 import { compassName, screenAngle, screenOffset } from './bearings';
 import { createCarRenderer } from './cars';
@@ -86,6 +86,7 @@ import {
   MIN_PITCH,
   ease,
   groundAxes,
+  keepInBox,
   keepInside,
   metresPerPixel,
   pan,
@@ -278,6 +279,8 @@ export interface CityDebug {
   setClock(hour: number): void;
   /** Of a tiled city: where the window's centre is (metres east and north of the city's origin), and which tile. */
   window(): { origin: [number, number]; tile: [number, number]; buildings: number } | null;
+  /** Of a tiled city: the tiles beyond the window being drawn for the camera, and which are built yet. */
+  scenery(): { tx: number; ty: number; built: boolean }[];
   /** Jump the game clock forward. */
   skip(seconds: number): void;
   /** Set the game clock to an exact time. */
@@ -358,6 +361,8 @@ export interface TiledCity {
   index: TileIndex;
   /** The window of tiles round (tx, ty), as one map with its own centre as origin. */
   loadWindow(tx: number, ty: number): Promise<CityData>;
+  /** One tile on its own, as a map with the tile's centre as origin (empty where there is no tile). */
+  loadTile(tx: number, ty: number): Promise<CityData>;
   /** Start fetching the window round (tx, ty), so it is at hand when needed. */
   prefetch(tx: number, ty: number): void;
 }
@@ -593,8 +598,11 @@ export async function createCityScene(
   );
 
   // ---------- ground ----------
+  const TERRAIN_SIZE = 14000;
+  /** One repeat of the ground texture, in metres. */
+  const TERRAIN_GRAIN = TERRAIN_SIZE / 300;
   const terrain = new Mesh(
-    own(new PlaneGeometry(14000, 14000)),
+    own(new PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE)),
     own(
       new MeshStandardMaterial({
         color: new Color().setRGB(...TERRAIN),
@@ -640,46 +648,18 @@ export async function createCityScene(
     dispose(): void;
   }
 
+  type Keep = <T extends { dispose(): void }>(thing: T) => T;
+
   /**
-   * Build the buildings, roads, ground, trees, lamps, towers and the collision world of one map,
-   * yielding a frame now and then so the page stays alive. `near` is where the survivor is to stand
-   * (null: beside the tallest tower, or the middle); `report` shows progress (the first time only).
+   * The buildings, roads, ground and towers of one map, into `group`, yielding a frame now and then
+   * so the page stays alive. What the district and a scenery tile have in common.
    */
-  async function buildDistrict(
+  async function raiseStreets(
     map: CityData,
-    near: [number, number] | null,
-    report: boolean,
-  ): Promise<District> {
-    const owned: { dispose(): void }[] = [];
-    const keep = <T extends { dispose(): void }>(thing: T): T => {
-      owned.push(thing);
-      return thing;
-    };
-    const say = (fraction: number, label: string): void => {
-      if (report) progress(fraction, label);
-    };
-    const group = new Group();
-    const mapHalf = map.halfSize;
-
-    // the quarantine perimeter: a faint glowing wall around the edge of a map that stands alone (a
-    // window of a bigger city has no edge, only more city beyond the fog)
-    if (!map.origin) {
-      const wallGeometry = keep(new PlaneGeometry(mapHalf * 2, 26));
-      const sides: [number, number, number][] = [
-        [0, -mapHalf, 0],
-        [0, mapHalf, 0],
-        [-mapHalf, 0, Math.PI / 2],
-        [mapHalf, 0, Math.PI / 2],
-      ];
-      for (const [x, z, ry] of sides) {
-        const wall = new Mesh(wallGeometry, perimeterMaterial);
-        wall.position.set(x, 13, z);
-        wall.rotation.y = ry;
-        wall.renderOrder = 5;
-        group.add(wall);
-      }
-    }
-
+    group: Group,
+    keep: Keep,
+    say: (fraction: number, label: string) => void,
+  ): Promise<void> {
     say(0.08, 'Raising buildings');
     const chunks = chunkBuildings(map.buildings, 250);
     for (let i = 0; i < chunks.length; i++) {
@@ -716,7 +696,87 @@ export async function createCityScene(
     const water = new Mesh(keep(toGeometry(ground.water)), waterMaterial);
     water.receiveShadow = true;
     group.add(water);
+
+    // landmarks: the tall towers
+    if (map.towers.length > 0) {
+      const towers = new Mesh(keep(toGeometry(buildTowers(map.towers))), towerMaterial);
+      towers.castShadow = true;
+      towers.receiveShadow = true;
+      group.add(towers);
+    }
     await nextFrame();
+  }
+
+  /** A tile beyond the window: there to be looked at, with nothing in it to play. */
+  interface Scenery {
+    group: Group;
+    setGlow(amount: number): void;
+    dispose(): void;
+  }
+
+  /** Build the look of one tile beyond the window: its streets, trees and lamps, and nobody about. */
+  async function buildScenery(map: CityData): Promise<Scenery> {
+    const owned: { dispose(): void }[] = [];
+    const keep: Keep = (thing) => {
+      owned.push(thing);
+      return thing;
+    };
+    const group = new Group();
+    await raiseStreets(map, group, keep, () => {});
+    const occupancy = buildOccupancy(map, 2);
+    const lamps = buildLampMeshes(placeLamps(map, occupancy), glowTexture, keep);
+    group.add(lamps.group);
+    group.add(buildTreeMeshes(placeTrees(map, occupancy), keep, cutaway));
+    return {
+      group,
+      setGlow: (amount) => lamps.setGlow(amount),
+      dispose() {
+        for (const d of owned) d.dispose();
+      },
+    };
+  }
+
+  /**
+   * Build the buildings, roads, ground, trees, lamps, towers and the collision world of one map,
+   * yielding a frame now and then so the page stays alive. `near` is where the survivor is to stand
+   * (null: beside the tallest tower, or the middle); `report` shows progress (the first time only).
+   */
+  async function buildDistrict(
+    map: CityData,
+    near: [number, number] | null,
+    report: boolean,
+  ): Promise<District> {
+    const owned: { dispose(): void }[] = [];
+    const keep: Keep = (thing) => {
+      owned.push(thing);
+      return thing;
+    };
+    const say = (fraction: number, label: string): void => {
+      if (report) progress(fraction, label);
+    };
+    const group = new Group();
+    const mapHalf = map.halfSize;
+
+    // the quarantine perimeter: a faint glowing wall around the edge of a map that stands alone (a
+    // window of a bigger city has no edge, only more city beyond the fog)
+    if (!map.origin) {
+      const wallGeometry = keep(new PlaneGeometry(mapHalf * 2, 26));
+      const sides: [number, number, number][] = [
+        [0, -mapHalf, 0],
+        [0, mapHalf, 0],
+        [-mapHalf, 0, Math.PI / 2],
+        [mapHalf, 0, Math.PI / 2],
+      ];
+      for (const [x, z, ry] of sides) {
+        const wall = new Mesh(wallGeometry, perimeterMaterial);
+        wall.position.set(x, 13, z);
+        wall.rotation.y = ry;
+        wall.renderOrder = 5;
+        group.add(wall);
+      }
+    }
+
+    await raiseStreets(map, group, keep, say);
 
     say(0.72, 'Planting trees');
     const occupancy = buildOccupancy(map, 2);
@@ -727,13 +787,7 @@ export async function createCityScene(
     group.add(buildTreeMeshes(treeSet, keep, cutaway));
     await nextFrame();
 
-    // landmarks: the tall towers, with beacons on them
-    if (map.towers.length > 0) {
-      const towers = new Mesh(keep(toGeometry(buildTowers(map.towers))), towerMaterial);
-      towers.castShadow = true;
-      towers.receiveShadow = true;
-      group.add(towers);
-    }
+    // beacons on the tall towers
     const beacons: Mesh[] = [];
     for (const tower of map.towers) {
       if (tower.height < 100) continue;
@@ -796,6 +850,17 @@ export async function createCityScene(
   // game has ever held (buildings keep their state when their tile is not loaded)
   const tiled = options.tiled ?? null;
   let origin: [number, number] = data.origin ?? [0, 0];
+  /** A tile beyond the window, drawn for the camera (the scenery section below). */
+  interface SceneryTile {
+    tx: number;
+    ty: number;
+    /** Set once the tile has been asked for, so it is asked for once. */
+    loading: boolean;
+    built: Scenery | null;
+    /** No longer wanted: whatever arrives for it is thrown away. */
+    dropped: boolean;
+  }
+  const scenery = new Map<string, SceneryTile>();
   let repaired = 0;
   const ledger: Ledger =
     isSavedGame(setup.resume) && setup.resume.city
@@ -926,6 +991,18 @@ export async function createCityScene(
       };
   let easeRate = skipIntro ? 30 : 1.7; // slow for the fly-in, then snappy
   let introUntil = skipIntro ? 0 : performance.now() + 3800;
+  // The free camera may wander the whole of a city in tiles (what it looks at is drawn as it goes,
+  // see the scenery below), but only the play area of a map that stands alone.
+  const cityBounds = tiled ? tileBounds(tiled.index) : null;
+  const confine = (rig: Rig): Rig =>
+    cityBounds
+      ? keepInBox(rig, {
+          minX: cityBounds.minX - origin[0],
+          maxX: cityBounds.maxX - origin[0],
+          minZ: -(cityBounds.maxY - origin[1]),
+          maxZ: -(cityBounds.minY - origin[1]),
+        })
+      : keepInside(rig, half);
 
   function setCameraMode(next: CameraMode): void {
     if (next === cameraMode) return;
@@ -977,6 +1054,7 @@ export async function createCityScene(
     fill.intensity = palette.fillIntensity;
     fill.position.set(-lightDirection.x, 0.5, -lightDirection.z).normalize().multiplyScalar(100);
     district.lamps.setGlow(palette.windowGlow);
+    for (const s of scenery.values()) s.built?.setGlow(palette.windowGlow);
     darkness = palette.windowGlow;
     renderer.toneMappingExposure = palette.exposure;
     wallMaterial.emissiveIntensity = palette.windowGlow * 1.1;
@@ -1057,7 +1135,7 @@ export async function createCityScene(
       goal = rotate(goal, -dx * 0.005, dy * 0.004);
     } else {
       const mpp = metresPerPixel(goal, FOV, canvas.clientHeight);
-      goal = keepInside(pan(goal, (dy * mpp) / Math.sin(goal.pitch), -dx * mpp), half);
+      goal = confine(pan(goal, (dy * mpp) / Math.sin(goal.pitch), -dx * mpp));
     }
     easeRate = Math.max(easeRate, 14);
   };
@@ -1325,8 +1403,90 @@ export async function createCityScene(
       home.z -= dy;
       effects.clear();
       applyTime(); // the new lamps take the glow of the hour
+      placeScenery(); // the scenery stays where it is in the city, which has moved under it
+      watchScenery(); // and what the new window covers goes
     } finally {
       shifting = false;
+    }
+  }
+
+  // ---------- scenery: the tiles beyond the window, drawn where the camera looks, not played ----------
+  // The game is played in the window round the survivor. The free camera may look past its edge, and
+  // what it sees there should be the city, not open ground: those tiles are drawn as they are on the
+  // map (streets, trees, lamps), with nobody in them, and let go again when the camera has moved on.
+  const tileExists = new Set((tiled?.index.tiles ?? []).map((t) => tileKey(t.tx, t.ty)));
+  /** A tile is kept until the camera looks further than this from it: at most a window's worth is held. */
+  const SCENERY_KEEP = 1;
+  let sceneryBusy = false;
+  let sceneryAt = 0;
+  /** Put each built tile where its centre is in the window's coordinates. */
+  function placeScenery(): void {
+    if (!tiled) return;
+    const size = tiled.index.tileSize;
+    for (const s of scenery.values()) {
+      s.built?.group.position.set(s.tx * size - origin[0], 0, -(s.ty * size - origin[1]));
+    }
+  }
+  function dropScenery(key: string, s: SceneryTile): void {
+    s.dropped = true;
+    scenery.delete(key);
+    if (s.built) {
+      scene.remove(s.built.group);
+      s.built.dispose();
+    }
+  }
+  /** A few times a second: which tiles beyond the window the camera looks at now, and tidying the rest. */
+  function watchScenery(): void {
+    if (!tiled) return;
+    const index = tiled.index;
+    const looking = tileAt(index, current.x + origin[0], -current.z + origin[1]);
+    const centre = tileAt(index, origin[0], origin[1]);
+    for (const [key, s] of scenery) {
+      const far = Math.max(Math.abs(s.tx - looking[0]), Math.abs(s.ty - looking[1])) > SCENERY_KEEP;
+      const covered = Math.abs(s.tx - centre[0]) <= 1 && Math.abs(s.ty - centre[1]) <= 1;
+      if (far || covered) dropScenery(key, s);
+    }
+    for (const [tx, ty] of sceneryTiles(looking, centre, 1)) {
+      const key = tileKey(tx, ty);
+      if (tileExists.has(key) && !scenery.has(key)) {
+        scenery.set(key, { tx, ty, loading: false, built: null, dropped: false });
+      }
+    }
+    void pumpScenery();
+  }
+  /** Build the scenery tiles that are waiting, one at a time, between the frames; the window comes first. */
+  async function pumpScenery(): Promise<void> {
+    if (sceneryBusy || !tiled) return;
+    sceneryBusy = true;
+    try {
+      for (;;) {
+        if (destroyed) return;
+        if (shifting) {
+          await nextFrame();
+          continue;
+        }
+        const next = [...scenery.values()].find((s) => !s.loading);
+        if (!next) return;
+        next.loading = true;
+        let map: CityData;
+        try {
+          map = await tiled.loadTile(next.tx, next.ty);
+        } catch {
+          continue; // left as asked-for: not tried again until the camera has been away and back
+        }
+        if (destroyed || next.dropped) continue;
+        const built = await buildScenery(map);
+        if (destroyed || next.dropped) {
+          built.dispose();
+          continue;
+        }
+        next.built = built;
+        built.setGlow(darkness);
+        scene.add(built.group);
+        placeScenery();
+      }
+    } finally {
+      sceneryBusy = false;
     }
   }
 
@@ -1382,7 +1542,7 @@ export async function createCityScene(
       Number(keys.has('a') || keys.has('arrowleft'));
     if (cameraMode === 'free' && (forward || sideways)) {
       const speed = goal.distance * 0.9 * (keys.has('shift') ? 2.6 : 1);
-      goal = keepInside(pan(goal, forward * speed * dt, sideways * speed * dt), half);
+      goal = confine(pan(goal, forward * speed * dt, sideways * speed * dt));
       easeRate = Math.max(easeRate, 9);
       introUntil = 0;
     }
@@ -1445,6 +1605,10 @@ export async function createCityScene(
     }
     gamePhase = game.status;
     if (tiled && !shifting && gamePhase === 'playing') watchWindow();
+    if (tiled && now - sceneryAt >= 300) {
+      sceneryAt = now;
+      watchScenery();
+    }
     const alpha = simClock / SIM_STEP;
     const px = lerp(previous.x, player.x, alpha);
     const py = lerp(previous.y, player.y, alpha);
@@ -1670,6 +1834,10 @@ export async function createCityScene(
     const tx = Math.round(current.x / texel) * texel;
     const tz = Math.round(current.z / texel) * texel;
     sun.target.position.set(tx, 0, tz);
+    // the bare ground goes on under the camera wherever it looks, moved by whole grains of its texture
+    // so that it never seems to slide
+    terrain.position.x = Math.round(current.x / TERRAIN_GRAIN) * TERRAIN_GRAIN;
+    terrain.position.z = Math.round(current.z / TERRAIN_GRAIN) * TERRAIN_GRAIN;
     sun.position.set(
       tx + lightDirection.x * 800,
       lightDirection.y * 800,
@@ -1844,6 +2012,9 @@ export async function createCityScene(
               buildings: gameWorld.buildings.length,
             };
           },
+          scenery() {
+            return [...scenery.values()].map((s) => ({ tx: s.tx, ty: s.ty, built: !!s.built }));
+          },
           setClock(hour) {
             game.clock = wrapHour(hour);
             game.night = nightness(game.clock, game.sunrise, game.sunset);
@@ -1976,6 +2147,7 @@ export async function createCityScene(
       zoomOutEvents.clear();
       survivor.dispose();
       pickupMarkers.dispose();
+      for (const [key, s] of scenery) dropScenery(key, s);
       sun.shadow.map?.dispose();
       for (const d of disposables) d.dispose();
       renderer.dispose();

@@ -3,7 +3,9 @@ import { convertOverpass, type OverpassElement } from '../src/city/osm';
 import {
   mergeTiles,
   parseTileIndex,
+  sceneryTiles,
   tileAt,
+  tileBounds,
   windowHalf,
   windowTiles,
   type TileIndex,
@@ -63,6 +65,37 @@ describe('which tile', () => {
     expect(windowTiles(2, -1, 1)[8]).toEqual([3, 0]);
     expect(windowHalf(index, 1)).toBe(1500);
     expect(windowHalf(index, 2)).toBe(2500);
+  });
+
+  it('scenery is the square round the camera less the window', () => {
+    // looking at the window's own centre tile, or any tile of it: only what lies beyond its edge
+    expect(sceneryTiles([0, 0], [0, 0])).toEqual([]);
+    expect(sceneryTiles([1, 0], [0, 0])).toEqual([
+      [2, -1],
+      [2, 0],
+      [2, 1],
+    ]);
+    expect(sceneryTiles([1, 1], [0, 0])).toHaveLength(5);
+    // two tiles out: the camera's square shares a column with the window
+    expect(sceneryTiles([2, 0], [0, 0])).toHaveLength(6);
+    // far away: the whole square
+    expect(sceneryTiles([5, -5], [0, 0])).toHaveLength(9);
+    expect(sceneryTiles([5, -5], [0, 0])).toEqual(windowTiles(5, -5, 1));
+  });
+
+  it('a city reaches to the outer edges of its outermost tiles', () => {
+    expect(tileBounds(index)).toBeNull();
+    const entry = (tx: number, ty: number) => ({
+      tx,
+      ty,
+      file: '',
+      buildings: 0,
+      roads: 0,
+      areas: 0,
+      bytes: 0,
+    });
+    const some = { ...index, tiles: [entry(-2, 0), entry(1, 3), entry(0, 0)] };
+    expect(tileBounds(some)).toEqual({ minX: -2500, maxX: 1500, minY: -500, maxY: 3500 });
   });
 });
 

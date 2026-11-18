@@ -222,6 +222,7 @@ onMounted(async () => {
       tiled = {
         index,
         loadWindow: (x, y) => store.window(x, y).then(markRaw),
+        loadTile: (x, y) => store.window(x, y, 0).then(markRaw),
         prefetch: (x, y) => store.prefetch(x, y),
       };
     } else {

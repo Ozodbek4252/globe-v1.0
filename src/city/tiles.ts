@@ -83,6 +83,45 @@ export function windowTiles(tx: number, ty: number, radius: number): [number, nu
 export const windowHalf = (index: Pick<TileIndex, 'tileSize'>, radius: number): number =>
   (radius + 0.5) * index.tileSize;
 
+/**
+ * The tiles to draw as scenery when the camera looks past the window: the square `radius` out from
+ * the tile the camera looks at, less the window (the same square round `centre`). None while the
+ * camera looks at the window's own centre tile.
+ */
+export function sceneryTiles(
+  camera: readonly [number, number],
+  centre: readonly [number, number],
+  radius = 1,
+): [number, number][] {
+  return windowTiles(camera[0], camera[1], radius).filter(
+    ([x, y]) => Math.abs(x - centre[0]) > radius || Math.abs(y - centre[1]) > radius,
+  );
+}
+
+export interface Bounds {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+/**
+ * How far a tiled city reaches, in metres east and north of its origin: the outer edges of its
+ * outermost tiles. Null for an index with no tiles.
+ */
+export function tileBounds(index: Pick<TileIndex, 'tileSize' | 'tiles'>): Bounds | null {
+  if (index.tiles.length === 0) return null;
+  const half = index.tileSize / 2;
+  const b: Bounds = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
+  for (const t of index.tiles) {
+    b.minX = Math.min(b.minX, t.tx * index.tileSize - half);
+    b.maxX = Math.max(b.maxX, t.tx * index.tileSize + half);
+    b.minY = Math.min(b.minY, t.ty * index.tileSize - half);
+    b.maxY = Math.max(b.maxY, t.ty * index.tileSize + half);
+  }
+  return b;
+}
+
 const shiftFlat = (flat: readonly number[], dx: number, dy: number): number[] =>
   flat.map((v, i) => Math.round((v + (i % 2 === 0 ? dx : dy)) * 10) / 10);
 
