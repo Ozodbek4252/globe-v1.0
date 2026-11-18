@@ -22,7 +22,10 @@ import type {
 } from '../city/createCity';
 import type { CityData } from '../city/types';
 import { deleteSave, getSave, putSave } from '../lib/saves';
+import { wantsTouch, type TouchAction, type TouchInput } from '../city/touch';
+import { readStored, writeStored } from '../lib/storage';
 import GameHud from './GameHud.vue';
+import TouchControls from './TouchControls.vue';
 import RadarScope from './RadarScope.vue';
 
 /** `active` false puts the scene to sleep (the globe is showing); it wakes paused when true again. */
@@ -64,6 +67,24 @@ const sunElevation = ref(0);
 const stats = shallowRef<CityStats | null>(null);
 const showStats = ref(false);
 const player = shallowRef<PlayerStatus | null>(null);
+
+// ---- a touch screen gets thumbsticks and buttons; sound is remembered per browser ----
+const touch = ref(wantsTouch(matchMedia('(pointer: coarse)').matches, location.search));
+const SOUND_KEY = 'atlas-globe:sound';
+const soundOn = ref(readStored(SOUND_KEY) !== '0');
+function setSound(on: boolean): void {
+  soundOn.value = on;
+  writeStored(SOUND_KEY, on ? '1' : '0');
+  scene?.setSound(on);
+}
+function onTouchInput(input: TouchInput): void {
+  scene?.setTouch(input);
+}
+function onTouchPress(action: TouchAction): void {
+  if (action === 'pause') scene?.togglePause();
+  else if (action === 'camera') scene?.setCameraMode('free');
+  else scene?.touchPress(action);
+}
 const radar = shallowRef<RadarFrame | null>(null);
 
 let scene: CityScene | null = null;
@@ -250,6 +271,7 @@ onMounted(async () => {
       return;
     }
     scene = created;
+    created.setSound(soundOn.value);
     // with ?debug=1 the scene is reachable from the console as window.__city, for staging scenes
     if (link.debug) (window as unknown as { __city?: CityScene }).__city = created;
     sunElevation.value = Math.round(created.sunElevation());
@@ -326,7 +348,14 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="root" class="cityview" role="dialog" aria-label="3D city view" tabindex="-1">
+  <div
+    ref="root"
+    class="cityview"
+    :class="{ touch }"
+    role="dialog"
+    aria-label="3D city view"
+    tabindex="-1"
+  >
     <div
       ref="host"
       class="city-host"
@@ -347,6 +376,12 @@ onBeforeUnmount(() => {
 
     <template v-if="ready">
       <RadarScope :frame="radar" />
+      <TouchControls
+        v-if="touch && player?.camera === 'follow' && player.phase === 'playing' && !player.paused"
+        :player="player"
+        @input="onTouchInput"
+        @press="onTouchPress"
+      />
       <GameHud
         ref="hud"
         :player="player"
@@ -384,6 +419,15 @@ onBeforeUnmount(() => {
         @click="setPaused(!player.paused)"
       >
         {{ player.paused ? '▶ Resume' : '⏸ Pause' }}
+      </button>
+      <button
+        class="city-btn city-sound"
+        type="button"
+        :aria-pressed="player?.sound ?? soundOn"
+        :aria-label="(player?.sound ?? soundOn) ? 'Sound on' : 'Sound off'"
+        @click="setSound(!(player?.sound ?? soundOn))"
+      >
+        {{ (player?.sound ?? soundOn) ? '🔊' : '🔇' }}
       </button>
 
       <button
@@ -513,7 +557,11 @@ onBeforeUnmount(() => {
       </div>
 
       <ul class="city-help" aria-label="Controls">
-        <template v-if="!player || player.camera === 'follow'">
+        <template v-if="touch">
+          <li>Left stick: walk, or drive &nbsp; Right stick: aim, push to fire</li>
+          <li>Drag the city to turn the camera &nbsp; pinch to zoom</li>
+        </template>
+        <template v-else-if="!player || player.camera === 'follow'">
           <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk &nbsp; <kbd>Shift</kbd> run</li>
           <li>
             <kbd>Mouse</kbd> aim &nbsp; <kbd>Click</kbd> fire &nbsp; <kbd>R</kbd> reload &nbsp;
@@ -644,6 +692,24 @@ onBeforeUnmount(() => {
   top: 16px;
   left: 104px;
   z-index: 2;
+}
+.city-sound {
+  position: absolute;
+  top: 16px;
+  left: 204px;
+  z-index: 2;
+  min-width: 44px;
+}
+/* a touch screen: the key list goes, and the bars sit above the thumbs */
+.cityview.touch .city-help {
+  display: none;
+}
+/* the ammunition moves beside the left stick, out from under the right one */
+.cityview.touch .hud-ammo {
+  right: auto;
+  left: 172px;
+  bottom: 14px;
+  justify-items: start;
 }
 
 .city-title {

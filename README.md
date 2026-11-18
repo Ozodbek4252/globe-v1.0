@@ -256,6 +256,15 @@ behind a door works, but it does not win the game.
   runs down (a full one lasts about seven minutes flat out), and an empty or wrecked car is left where
   it stands. Cars stay where you leave them, through saves, through the window moving across a big
   city, and for the next survivor.
+- **Sound.** Everything is made on the spot with the Web Audio API (no recordings): the guns, the
+  horde's groans and snarls from where they stand, blows on the door you are behind, the engine with
+  its speed, your footsteps, a heartbeat when you are badly hurt, a little wind. It is panned and
+  faded from the camera, muffled behind a door, and starts on your first key or tap (browsers allow
+  no sooner). `M` or the speaker button turns it off; the choice is kept.
+- **On a phone or tablet** two thumbsticks and a few buttons appear over the city: the left stick
+  walks (at the wheel it is the pedal and the wheel), the right one aims and, pushed far, fires;
+  buttons for the door or car, reload, shove, run, the next gun and the light. Drag the city to turn
+  the camera, pinch to zoom. `?touch=1` forces them on a desktop, `?touch=0` off.
 
 **Staying fed.** Hunger drains steadily; at zero you starve and nothing heals. Food crates and first aid
 lie about the streets, shops and clinics have more, and kills sometimes drop some.

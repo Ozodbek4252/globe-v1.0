@@ -72,6 +72,8 @@ import { sceneryTiles, tileAt, tileBounds, tileKey, type TileIndex } from './til
 import type { PlaceKind } from '../sim/places';
 import { compassName, screenAngle, screenOffset } from './bearings';
 import { createCarRenderer } from './cars';
+import { createSoundScape, type Groaner } from './sound';
+import { nextWeapon, NO_TOUCH, type TouchAction, type TouchInput } from './touch';
 import { createSurvivor } from './character';
 import { createCutaway, type Cutaway } from './cutaway';
 import { createEffects, type AimMode } from './effects';
@@ -201,6 +203,8 @@ export interface PlayerStatus {
   prompt: { label: string; name: string } | null;
   /** At the wheel: what it is, how fast (m/s), the tank (0 to 1), the car's condition (0 to 1); null on foot. */
   car: { kind: string; speed: number; fuel: number; condition: number; wrecked: boolean } | null;
+  /** Sound is on (M toggles it). */
+  sound: boolean;
   /** The radar is on: the minimap is available. */
   radarOn: boolean;
   /** The next goal, how far off it is, and where it lies on the screen (radians clockwise from up). */
@@ -402,6 +406,13 @@ export interface CityScene {
   cameraMode(): CameraMode;
   setCameraMode(mode: CameraMode): void;
   toggleFlashlight(): void;
+  /** Turn the sound on or off (it starts on the first key or tap, as browsers require). */
+  setSound(on: boolean): void;
+  soundOn(): boolean;
+  /** What the thumbs are doing on a touch screen (null when there are no touch controls); read each frame beside the keys. */
+  setTouch(input: TouchInput | null): void;
+  /** A touch button was pressed. */
+  touchPress(action: TouchAction): void;
   /** Fires about twice a second. */
   onStats(listener: (stats: CityStats) => void): Unsubscribe;
   /** Fires about ten times a second with the survivor's condition. */
@@ -1103,9 +1114,40 @@ export async function createCityScene(
   // Asleep: the scene is kept but neither drawn nor stepped nor listening (the globe is showing).
   let sleeping = false;
   let aimScreen: { x: number; y: number } | null = null;
+  // sound: made on the spot (src/city/sound.ts); it may only start on a gesture
+  const sounds = createSoundScape();
+  let soundSampleIn = 0;
+  const groaners: Groaner[] = [];
+  let nearCount = 0;
+  // a touch screen's thumbs, read each frame beside the keys
+  let touch: TouchInput | null = null;
+  function touchPress(action: TouchAction): void {
+    sounds.unlock();
+    if (cameraMode !== 'follow' || game.status !== 'playing') return;
+    switch (action) {
+      case 'interact':
+        interactQueued = true;
+        break;
+      case 'reload':
+        reloadQueued = true;
+        break;
+      case 'shove':
+        shoveQueued = true;
+        break;
+      case 'weapon':
+        weaponQueued = nextWeapon(game.weapon, game.hasShotgun, game.hasRifle);
+        break;
+      case 'flashlight':
+        flashlightPref = flashlightOn() ? 'off' : 'on';
+        break;
+      default:
+        break;
+    }
+  }
   const onKeyDown = (e: KeyboardEvent): void => {
     if (sleeping) return;
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    sounds.unlock();
     const k = e.key.toLowerCase();
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     // Enter plays again; on a focused button it already means "press this", so leave it alone there
@@ -1123,6 +1165,7 @@ export async function createCityScene(
       weaponQueued = k === '1' ? 1 : k === '2' ? 2 : 3; // the pistol / the shotgun / the rifle
     } else if (k === 'v') setCameraMode(cameraMode === 'follow' ? 'free' : 'follow');
     else if (k === 'l') flashlightPref = flashlightOn() ? 'off' : 'on';
+    else if (k === 'm') sounds.setEnabled(!sounds.enabled());
     else if (k === 't' && tower) {
       setCameraMode('free');
       goal = { ...goal, x: tower.x, z: -tower.y + 40 };
@@ -1164,6 +1207,7 @@ export async function createCityScene(
   };
   const onPointerDown = (e: PointerEvent): void => {
     canvas.setPointerCapture(e.pointerId);
+    sounds.unlock();
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     introUntil = 0;
     trackAim(e);
@@ -1247,24 +1291,50 @@ export async function createCityScene(
     switch (e.type) {
       case 'shot':
         effects.shot(e.x, e.y, e.endX, e.endY, e.hit);
+        sounds.shot(game.weapon, e.x, e.y);
         break;
       case 'hit':
         effects.hit(e.x, e.y, e.kill);
+        sounds.hit(e.x, e.y, e.kill);
         break;
       case 'noise':
         effects.noise(e.x, e.y, e.radius);
         break;
       case 'hurt':
+        sounds.hurt(e.amount);
         notices.emit({
           type: 'hurt',
           amount: e.amount,
           angle: screenAngle(current.yaw, e.fromX - player.x, e.fromY - player.y),
         });
         break;
+      case 'reload':
+        sounds.reload();
+        break;
+      case 'reloaded':
+        sounds.reloaded();
+        break;
+      case 'empty':
+        sounds.empty();
+        break;
+      case 'swing':
+        sounds.swing();
+        break;
+      case 'shove':
+        sounds.shove();
+        break;
+      case 'leave':
+        sounds.door(false);
+        break;
+      case 'door':
+        sounds.battering(e.fraction);
+        break;
       case 'pickup':
+        sounds.pickup(e.kind);
         notices.emit({ type: 'pickup', kind: e.kind });
         break;
       case 'loot':
+        sounds.loot(e.ammo + e.health + e.food === 0 && !e.shotgun);
         notices.emit({
           type: 'loot',
           ammo: e.ammo,
@@ -1279,15 +1349,19 @@ export async function createCityScene(
         notices.emit({ type: 'weapon', weapon: e.weapon });
         break;
       case 'radar':
+        sounds.radar();
         notices.emit({ type: 'radar', place: gameWorld.places[e.place].name });
         break;
       case 'enter':
+        sounds.door(true);
         notices.emit({ type: 'enter', place: gameWorld.places[e.place].name });
         break;
       case 'breach':
+        sounds.breach();
         notices.emit({ type: 'breach', place: gameWorld.places[e.place].name });
         break;
       case 'car':
+        sounds.car(e.what, e.force);
         if (e.what === 'crash') effects.noise(e.x, e.y, Math.min(12, e.force * 1.5));
         if (e.what !== 'crash' || e.force > CAR.hurtSpeed) {
           notices.emit({ type: 'car', what: e.what, force: e.force });
@@ -1310,7 +1384,7 @@ export async function createCityScene(
         break;
       }
       default:
-        break; // reload, reloaded, empty, shove: no picture yet
+        break; // weapon: announced above; nothing else to show
     }
   }
 
@@ -1573,16 +1647,27 @@ export async function createCityScene(
     // is up the screen: the direction the camera looks, flattened onto the ground.
     const axes = groundAxes(current.yaw);
     const walking = cameraMode === 'follow';
-    const aim = debugAutoAim ? nearestZombie() : aimPoint();
+    // on a touch screen the thumbs add to the keys: the left stick walks, the right one aims and fires
+    const thumbs = touch ?? NO_TOUCH;
+    const fwd = clamp(forward + thumbs.move[1], -1, 1);
+    const side = clamp(sideways + thumbs.move[0], -1, 1);
+    let aim: readonly [number, number] | null = debugAutoAim ? nearestZombie() : aimPoint();
+    if (!debugAutoAim && walking && thumbs.aim) {
+      const [ax, ay] = thumbs.aim; // a direction on the screen: 25 m that way from the survivor
+      aim = [
+        player.x + (ax * axes.right[0] + ay * axes.forward[0]) * 25,
+        player.y - (ax * axes.right[1] + ay * axes.forward[1]) * 25,
+      ];
+    }
     const input: GameInput = {
-      moveX: walking ? forward * axes.forward[0] + sideways * axes.right[0] : 0,
-      moveY: walking ? -(forward * axes.forward[1] + sideways * axes.right[1]) : 0,
+      moveX: walking ? fwd * axes.forward[0] + side * axes.right[0] : 0,
+      moveY: walking ? -(fwd * axes.forward[1] + side * axes.right[1]) : 0,
       // at the wheel the same keys are the pedal and the wheel: W forward, S brake, A left, D right
-      throttle: walking ? forward : 0,
-      steer: walking ? -sideways : 0,
-      sprint: keys.has('shift'),
+      throttle: walking ? fwd : 0,
+      steer: walking ? -side : 0,
+      sprint: keys.has('shift') || thumbs.sprint,
       aim,
-      fire: walking && triggerHeld,
+      fire: walking && (triggerHeld || thumbs.fire),
       reload: reloadQueued,
       shove: shoveQueued,
       interact: interactQueued,
@@ -1625,6 +1710,49 @@ export async function createCityScene(
     }
     gamePhase = game.status;
     if (tiled && !shifting && gamePhase === 'playing') watchWindow();
+
+    // sound: the listener is the camera; what goes on (the engine, the horde, steps) follows the game
+    sounds.listen(camera.position.x, -camera.position.z, axes.right[0], -axes.right[1]);
+    soundSampleIn -= dt;
+    if (soundSampleIn <= 0) {
+      soundSampleIn = 0.25;
+      groaners.length = 0;
+      nearCount = 0;
+      const h = game.horde;
+      for (let i = 0; i < h.used; i++) {
+        if (h.state[i] >= ZState.DEAD) continue;
+        const dx = h.x[i] - player.x;
+        const dy = h.y[i] - player.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 > 60 * 60) continue;
+        if (d2 < 40 * 40) nearCount++;
+        if (groaners.length < 24)
+          groaners.push({
+            x: h.x[i],
+            y: h.y[i],
+            chasing: h.state[i] === ZState.CHASE || h.state[i] === ZState.ATTACK,
+          });
+      }
+    }
+    const drivenCar = game.driving >= 0 ? game.cars[game.driving] : null;
+    sounds.update({
+      dt: simDt,
+      engine: drivenCar
+        ? {
+            speed: Math.abs(drivenCar.speed),
+            top: kindOf(drivenCar).topRoad,
+            running: input.throttle !== 0,
+            broken: wrecked(drivenCar) || drivenCar.fuel <= 0,
+          }
+        : null,
+      groaners,
+      near: nearCount,
+      walking: drivenCar ? 0 : speedOf(player) > 1.2 ? (player.sprinting ? 2 : 1) : 0,
+      health: game.health,
+      night: darkness,
+      inside: game.inside >= 0,
+      playing: gamePhase === 'playing' && !paused && !debugFrozen,
+    });
     if (tiled && now - sceneryAt >= 300) {
       sceneryAt = now;
       watchScenery();
@@ -1829,6 +1957,7 @@ export async function createCityScene(
               }
             : null,
         radarOn: game.radarOn,
+        sound: sounds.enabled(),
         objective,
         inside:
           game.inside >= 0
@@ -1923,6 +2052,15 @@ export async function createCityScene(
     toggleFlashlight() {
       flashlightPref = flashlightOn() ? 'off' : 'on';
     },
+    setSound(on) {
+      sounds.setEnabled(on);
+    },
+    soundOn: () => sounds.enabled(),
+    setTouch(input) {
+      touch = input;
+      if (input) sounds.unlock();
+    },
+    touchPress,
     onStats: stats.on,
     onPlayer: playerEvents.on,
     onGame: notices.on,
@@ -1941,6 +2079,7 @@ export async function createCityScene(
       paused = !paused && game.status === 'playing';
     },
     setSleeping(on) {
+      if (on) sounds.hush();
       if (on === sleeping) return;
       sleeping = on;
       if (on) {
@@ -2152,6 +2291,7 @@ export async function createCityScene(
       destroyed = true;
       cancelAnimationFrame(frameId);
       resizeObserver.disconnect();
+      sounds.dispose();
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
