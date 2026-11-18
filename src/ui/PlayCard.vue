@@ -31,9 +31,7 @@ const people = computed(() =>
     <div class="top">
       <div>
         <h2>{{ place.name }}</h2>
-        <div class="formal">
-          {{ place.country }} · {{ place.kind === 'village' ? 'village' : 'city' }}
-        </div>
+        <div class="formal">{{ place.country }} · {{ place.kind }}</div>
       </div>
       <button class="x" aria-label="Close" @click="$emit('close')">×</button>
     </div>

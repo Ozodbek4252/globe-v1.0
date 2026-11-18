@@ -20,6 +20,9 @@
 //   --tile      side of a tile in metres                                  (default 1000)
 //   --reach     how far from the origin to look, in metres, each way      (default 15000)
 //   --out       output folder                                             (default public/cities)
+//   --infill    make up the houses where the map has streets and residential land but no buildings
+//               (src/city/infill.ts): for places OpenStreetMap has barely any buildings in. Everything
+//               kept is then also converted once as one map, so keep the reach modest (a town).
 //
 // Tile (tx, ty) covers x in [tx*tile - tile/2, tx*tile + tile/2) and the same for y, in metres east
 // and north of the origin; each tile's coordinates are kept relative to its own centre, with that
@@ -30,6 +33,7 @@ import { createReadStream, mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { gzipSync } from 'node:zlib';
+import { infillHouses } from '../src/city/infill.ts';
 import { convertOverpass, makeProjector } from '../src/city/osm.ts';
 
 const args = process.argv.slice(2);
@@ -54,6 +58,7 @@ const name = arg('name', id);
 const tile = Number(arg('tile', '1000'));
 const reach = Number(arg('reach', '15000'));
 const outDir = resolve(arg('out', 'public/cities'), id);
+const infill = args.includes('--infill');
 if (![lat, lon, tile, reach].every(Number.isFinite)) {
   console.error('--lat, --lon, --tile and --reach must be numbers');
   process.exit(2);
@@ -155,8 +160,18 @@ function wanted(tags) {
 
 // ---- read everything once, binning each element into the tiles it touches
 const byTile = new Map(); // "tx,ty" -> elements
+const everything = []; // each kept element once, for the infill
+const residential = []; // flat rings in metres of the residential land, for the infill
 let read = 0;
 let kept = 0;
+/** The outer rings of an element, as flat [x0, y0, ...] in metres from the origin. */
+const outerRings = (el) => {
+  const flat = (pts) => pts.flatMap((p) => project(p.lon, p.lat));
+  if (el.type === 'way') return [flat(el.geometry)];
+  if (el.type === 'relation')
+    return el.members.filter((m) => m.role === 'outer').map((m) => flat(m.geometry));
+  return [];
+};
 const rl = createInterface({ input: createReadStream(input), crlfDelay: Infinity });
 for await (const rawLine of rl) {
   // GeoJSONSeq puts a record separator (0x1e) before each line
@@ -174,6 +189,10 @@ for await (const rawLine of rl) {
   const b = bounds(el);
   if (b.maxX < -reach || b.minX > reach || b.maxY < -reach || b.minY > reach) continue;
   kept++;
+  if (infill) {
+    everything.push(el);
+    if (el.tags.landuse === 'residential') residential.push(...outerRings(el));
+  }
   // a building or a tree lands in one tile (its centroid, decided by the converter); areas and roads
   // are handed to every tile their box touches, and the converter clips them
   const tx0 = Math.max(-Math.ceil(reach / tile), tileOf(b.minX));
@@ -191,10 +210,42 @@ for await (const rawLine of rl) {
   if (read % 200000 === 0) console.log(`  read ${read} features, kept ${kept}`);
 }
 console.log(`Read ${read} features, kept ${kept}, in ${byTile.size} tiles`);
+const generated = new Date().toISOString().slice(0, 10);
+
+// ---- the made-up houses: from the whole area as one map, dealt to the tiles by where they stand
+const housesByTile = new Map(); // "tx,ty" -> buildings in the tile's own coordinates
+if (infill) {
+  const whole = convertOverpass(
+    { elements: everything },
+    { id, name, center: [lon, lat], halfSize: reach, generated },
+  );
+  const houses = infillHouses(whole, residential);
+  for (const h of houses) {
+    let cx = 0;
+    let cy = 0;
+    for (let i = 0; i < h.outer.length; i += 2) {
+      cx += h.outer[i];
+      cy += h.outer[i + 1];
+    }
+    const n = h.outer.length / 2;
+    const tx = tileOf(cx / n);
+    const ty = tileOf(cy / n);
+    const key = `${tx},${ty}`;
+    const local = {
+      ...h,
+      outer: h.outer.map((v, i) => Math.round((v - (i % 2 === 0 ? tx : ty) * tile) * 10) / 10),
+    };
+    const list = housesByTile.get(key);
+    if (list) list.push(local);
+    else housesByTile.set(key, [local]);
+  }
+  console.log(
+    `Made up ${houses.length} houses along the streets of ${residential.length} residential areas (the map had ${whole.buildings.length} buildings)`,
+  );
+}
 
 // ---- convert each tile and write it
 mkdirSync(outDir, { recursive: true });
-const generated = new Date().toISOString().slice(0, 10);
 const index = {
   version: 1,
   id,
@@ -207,7 +258,8 @@ const index = {
 };
 let bytes = 0;
 let totalBuildings = 0;
-for (const [key, elements] of byTile) {
+for (const key of new Set([...byTile.keys(), ...housesByTile.keys()])) {
+  const elements = byTile.get(key) ?? [];
   const [tx, ty] = key.split(',').map(Number);
   const data = convertOverpass(
     { elements },
@@ -220,6 +272,7 @@ for (const [key, elements] of byTile) {
       generated,
     },
   );
+  data.buildings.push(...(housesByTile.get(key) ?? []));
   // an empty square of farmland is not a tile: the game treats a missing tile as open ground
   if (data.buildings.length === 0 && data.roads.length === 0 && data.areas.length === 0) continue;
   const json = JSON.stringify(data);

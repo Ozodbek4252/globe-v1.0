@@ -11,6 +11,50 @@
     "tiled": true
   },
   {
+    "id": "kokand",
+    "name": "Kokand",
+    "country": "Uzbekistan",
+    "lat": 40.5408,
+    "lon": 70.9474,
+    "density": 5500,
+    "kind": "city",
+    "blurb": "The old khanate capital of the Fergana Valley, whole: the khan's palace and the bazaar in the middle, and mile after mile of courtyard houses along the lanes.",
+    "tiled": true
+  },
+  {
+    "id": "buvayda",
+    "name": "Buvayda",
+    "country": "Uzbekistan",
+    "lat": 40.6385,
+    "lon": 71.085,
+    "density": 1800,
+    "kind": "town",
+    "blurb": "A town north-east of Kokand: one main road, courtyard houses and orchards between the canals, and open country all round.",
+    "tiled": true
+  },
+  {
+    "id": "yangiqorgon",
+    "name": "Yangiqo'rg'on",
+    "country": "Uzbekistan",
+    "lat": 40.5566,
+    "lon": 71.1431,
+    "density": 1800,
+    "kind": "town",
+    "blurb": "The seat of Buvayda district, between Kokand and Fergana (Ibrat on newer maps): a market town of low houses on a grid of lanes.",
+    "tiled": true
+  },
+  {
+    "id": "uchkoprik",
+    "name": "Uchko'prik",
+    "country": "Uzbekistan",
+    "lat": 40.5456,
+    "lon": 71.0559,
+    "density": 2500,
+    "kind": "town",
+    "blurb": "Three Bridges, a district town just east of Kokand: a dense core along the main road, fields and canals beyond.",
+    "tiled": true
+  },
+  {
     "id": "paris",
     "name": "Paris",
     "country": "France",

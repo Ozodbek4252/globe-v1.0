@@ -7,7 +7,7 @@
 
 import { fetchJson, type JsonLoader } from './data';
 
-export type PlaceKind = 'city' | 'village';
+export type PlaceKind = 'city' | 'town' | 'village';
 
 export interface Playable {
   /** The file name: `public/cities/<id>.json`. */
@@ -53,7 +53,7 @@ export function parsePlayable(raw: unknown): Playable[] {
       lat: r.lat,
       lon: r.lon,
       density: r.density,
-      kind: r.kind === 'village' ? 'village' : 'city',
+      kind: r.kind === 'village' || r.kind === 'town' ? r.kind : 'city',
       blurb: typeof r.blurb === 'string' ? r.blurb : '',
       tiled: r.tiled === true,
     });

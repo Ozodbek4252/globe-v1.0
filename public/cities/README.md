@@ -12,6 +12,10 @@ credit OpenStreetMap, and share the data under the same licence. The game's own 
 | File            | Area                                                | Extracted  |
 | --------------- | --------------------------------------------------- | ---------- |
 | `tashkent/`     | The whole of Tashkent, 31 km x 31 km in 899 tiles of 1 km (see below)  | 2026-11-17 |
+| `kokand/`       | The whole of Kokand, 19 km x 19 km in tiles of 1 km (houses made up, see below) | 2026-11-18 |
+| `buvayda/`      | Buvayda and 5 km around it, 11 km x 11 km in tiles (houses made up)  | 2026-11-18 |
+| `yangiqorgon/`  | Yangiqo'rg'on (Ibrat) and 5 km around it, 11 km x 11 km in tiles (houses made up) | 2026-11-18 |
+| `uchkoprik/`    | Uchko'prik and 5 km around it, 11 km x 11 km in tiles (houses made up) | 2026-11-18 |
 | `paris.json`    | 1.6 km x 1.6 km around the Eiffel Tower             | 2026-11-17 |
 | `tokyo.json`    | 1.6 km x 1.6 km around Tokyo Tower (Shiba)          | 2026-11-17 |
 | `newyork.json`  | 1.4 km x 1.4 km around Times Square (Midtown)       | 2026-11-17 |
@@ -27,7 +31,16 @@ a line for its card. A place needs a map file of the same name. Add one with `sc
 
 Regenerate with `scripts/fetch-city.mjs`.
 
-`tashkent/` is a tiled city: `index.json` lists the tiles and each `t_<x>_<y>.json.gz` is one square
-kilometre in the same format as the single files, with its centre's offset from the city's origin in
-`origin`. The game streams the tiles around the survivor. They were cut from the Geofabrik Uzbekistan
-extract with `osmium` and `scripts/tile-city.mjs` (see the header of that file).
+`tashkent/`, `kokand/`, `buvayda/`, `yangiqorgon/` and `uchkoprik/` are tiled cities: `index.json`
+lists the tiles and each `t_<x>_<y>.json.gz` is one square kilometre in the same format as the single
+files, with its centre's offset from the city's origin in `origin`. The game streams the tiles around
+the survivor. They were cut from the Geofabrik Uzbekistan extract with `osmium` and
+`scripts/tile-city.mjs` (see the header of that file).
+
+**Made-up houses.** In the Fergana Valley OpenStreetMap has nearly every lane and the residential land,
+but hardly any buildings (Kokand: 2,100 mapped in 19 km x 19 km; Uchko'prik: 170). For those four places
+the tiles were cut with `--infill`: courtyard houses, and now and then a block of flats or a public
+building, are made up along the mapped streets inside the mapped residential land, clear of the roads,
+the water and every real building (`src/city/infill.ts`, deterministic). They are marked `estimated`
+and have ids from 2,000,000,000 up. The streets, land use, water, cemeteries and the real buildings are
+OpenStreetMap's; the houses are not, and should not be taken for a map of the place.

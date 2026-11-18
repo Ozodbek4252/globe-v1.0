@@ -124,7 +124,11 @@ you as you go (a note under the clock says when the next part is being built). T
 the parts you are not in, and the horde and the people come with you across the seams; the city's
 numbers at the top count everything the game has seen. The game is played in a 3 km window around
 you; the free camera can fly over the whole city, and the tiles it looks at beyond the window are
-drawn as they are on the map (streets, trees, lamps, nobody about) and let go when it moves on. The other places are a real district each, a square 1.2 to 1.8 km across: Paris around
+drawn as they are on the map (streets, trees, lamps, nobody about) and let go when it moves on.
+Four more whole places are in the Fergana Valley: Kokand (19 km across) and the towns of Buvayda,
+Yangiqo'rg'on and Uchko'prik (11 km each). OpenStreetMap has their every lane but hardly any of their
+buildings, so the houses there are made up along the mapped streets inside the mapped residential land
+(`src/city/infill.ts`, deterministic; see `public/cities/README.md`). The other places are a real district each, a square 1.2 to 1.8 km across: Paris around
 the Eiffel Tower, Tokyo Tower and Shiba, Midtown Manhattan, downtown Cairo, London at Tower Bridge,
 Sydney's Circular Quay, and Oia, a village on Santorini. A crowd is sized from
 each place's own density of people (a rough public figure, in `public/cities/index.json`).
