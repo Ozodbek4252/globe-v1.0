@@ -61,6 +61,7 @@ import { isSavedGame, loadGame, saveGame, type SavedGame } from '../sim/save';
 import { CAR, createCar, onRoad, wrecked, type Car } from '../sim/vehicle';
 import {
   advanceLedger,
+  enterWindow,
   ledgerOutside,
   migrateGame,
   readLedger,
@@ -1609,10 +1610,12 @@ export async function createCityScene(
       steps++;
     }
     if (steps === 6) simClock = 0; // far behind (a stalled tab): do not try to catch up
-    // the rest of a big city does not stand still while the survivor stays in one part of it
+    // The rest of a big city does not stand still while the survivor stays in one part of it: the
+    // outbreak goes on out there, and what it brings to the window's edge comes in.
     if (tiled && game.tick - ledgerTick >= LEDGER_EVERY) {
       ledgerTick = game.tick;
-      advanceLedger(ledger, game.tick, game.rng);
+      advanceLedger(ledger, game.tick, game.rng, new Set(gameWorld.buildings.map((b) => b.id)));
+      enterWindow(game, gameWorld, ledger);
       cityPopulation();
     }
     // the sky follows the game's clock, however it was set (it changes in steps of about a minute)
@@ -2080,8 +2083,9 @@ export async function createCityScene(
             let broken = 0;
             let sample: unknown = null;
             for (const [id, e] of ledger) {
-              const bad = Object.values(e).some(
-                (v) => typeof v === 'number' && !Number.isFinite(v),
+              // (a door nobody can get to has no position, and that is not a fault)
+              const bad = Object.entries(e).some(
+                ([k, v]) => k !== 'x' && k !== 'y' && typeof v === 'number' && !Number.isFinite(v),
               );
               if (!bad) continue;
               broken++;

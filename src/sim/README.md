@@ -27,11 +27,17 @@ City scale (a survivor, a city of people, a horde, a clock), all in metres, x ea
 | `save.ts`       | A game as plain data, written out and read back exactly                                                    |
 | `window.ts`     | Carrying a game into the next window of a big city: shift, fold, and a ledger of buildings by id           |
 
-In a tiled city the ledger is the rest of the city. A building's entry keeps its people, its door, its
-place state, and its roaming dead (zombies the window left in its street); when a window moves, every
-entry is brought up to date with the same rules as `stepOutbreak` in strides of twenty seconds, so the
-outbreak spreads where nobody is looking, and the roaming take to the street as individuals when their
-tile is loaded again, as room in the horde allows. The city's numbers are the window's plus the ledger's.
+In a tiled city the ledger is the rest of the city. A building's entry keeps its people, its door,
+where it stands (in the window's coordinates; the whole ledger moves with the window), its place
+state, and its roaming dead (zombies the window left in its street). Every twenty seconds, and when a
+window moves, every entry beyond the window is brought up to date: the outbreak inside with the same
+rules as `stepOutbreak`, then the street (`SPREAD`): the roaming batter the door they stand at and
+bite through it, and once nobody well is left behind it they move on to the nearest doors within
+reach that still have people, splitting as they go, so the outbreak keeps crossing the city where
+nobody is looking. The roaming just beyond the window's edge walk into it as zombies the game plays,
+a few at a time, and the roaming of a tile take to the street as individuals when it is loaded again,
+as room in the horde allows. The ledger only knows buildings a window has held: the outbreak does not
+cross into tiles the survivor has never been near. The city's numbers are the window's plus the ledger's.
 
 `src/lib/rng.ts` is the seeded random number generator they all use.
 

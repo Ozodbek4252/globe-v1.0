@@ -16,12 +16,16 @@ import { HState, spawnHuman } from '../src/sim/humans';
 import type { PlaceBuilding } from '../src/sim/places';
 import {
   advanceEntry,
+  advanceLedger,
   applyLedger,
+  enterWindow,
   foldOutside,
   ledgerOutside,
   migrateGame,
   readLedger,
   shiftGame,
+  shiftLedger,
+  SPREAD,
   stashWindow,
   type Ledger,
   type LedgerEntry,
@@ -149,7 +153,14 @@ describe('the ledger', () => {
     ga.outbreak.open[0] = 1;
     const ledger: Ledger = new Map();
     stashWindow(ga, a, ledger);
-    expect(ledger.get(id)).toMatchObject({ undead: 7, healthy: 3, open: true });
+    expect(ledger.get(id)).toMatchObject({
+      undead: 7,
+      healthy: 3,
+      open: true,
+      x: ga.outbreak.doorX[0],
+      y: ga.outbreak.doorY[0],
+      shelter: false,
+    });
 
     const b = windowWorld([400, 0], 800); // another window that also holds that building
     const gb = createGame(b, OPTIONS);
@@ -178,21 +189,24 @@ describe('the ledger', () => {
   });
 });
 
-describe('a tile that is away', () => {
-  const entry = (healthy: number, incubating: number, undead: number): LedgerEntry => ({
-    healthy,
-    incubating,
-    undead,
-    doorHp: 100,
-    open: false,
-    used: false,
-    breached: false,
-    shelterDoor: 600,
-    roaming: 0,
-    tick: 0,
-  });
-  const total = (e: LedgerEntry): number => e.healthy + e.incubating + e.undead + e.roaming;
+const entry = (healthy: number, incubating: number, undead: number): LedgerEntry => ({
+  healthy,
+  incubating,
+  undead,
+  doorHp: 100,
+  open: false,
+  used: false,
+  breached: false,
+  shelterDoor: 600,
+  roaming: 0,
+  tick: 0,
+  x: Number.NaN,
+  y: Number.NaN,
+  shelter: false,
+});
+const total = (e: LedgerEntry): number => e.healthy + e.incubating + e.undead + e.roaming;
 
+describe('a tile that is away', () => {
   it('goes on with the outbreak inside: the bitten turn, the turned bite, and some come out', () => {
     const e = entry(80, 0, 3);
     const rng = createRng(5);
@@ -249,6 +263,103 @@ describe('a tile that is away', () => {
   });
 });
 
+describe('the street beyond the window', () => {
+  const STRIDE = 60 * 20; // ticks: the ledger is advanced every twenty seconds
+  /** A row of houses `apart` metres along a street, ten people in each, numbered from the west. */
+  const row = (n: number, apart = 24): Ledger => {
+    const ledger: Ledger = new Map();
+    for (let i = 0; i < n; i++)
+      ledger.set(100 + i, { ...entry(10, 0, 0), doorHp: 60, x: i * apart, y: 0 });
+    return ledger;
+  };
+  const house = (ledger: Ledger, i: number): LedgerEntry => ledger.get(100 + i)!;
+  const everyone = (ledger: Ledger): number =>
+    [...ledger.values()].reduce((n, e) => n + total(e), 0);
+  const minutes = (ledger: Ledger, m: number, seed = 3, skip?: Set<number>): void => {
+    const rng = createRng(seed);
+    for (let k = 1; k <= m * 3; k++) advanceLedger(ledger, k * STRIDE, rng, skip);
+  };
+
+  it('batters the door they stand at, bites through it, and moves on down the street', () => {
+    const ledger = row(12);
+    Object.assign(house(ledger, 0), { healthy: 0, roaming: 4 });
+    ledger.set(999, { ...entry(10, 0, 0), x: 1000, y: 0 }); // a house across the city
+    minutes(ledger, 10);
+    // the outbreak went down the row, house by house, and nobody was made or lost on the way
+    const touched = Array.from({ length: 12 }, (_, i) => house(ledger, i).healthy < 10);
+    const reached = touched.lastIndexOf(true);
+    expect(reached).toBeGreaterThanOrEqual(4);
+    expect(touched.slice(0, reached).every(Boolean)).toBe(true);
+    expect(house(ledger, 0).roaming).toBe(0); // they moved on
+    expect(house(ledger, 1).open).toBe(true);
+    expect(ledger.get(999)).toMatchObject({ healthy: 10, roaming: 0 });
+    expect(everyone(ledger)).toBe(11 * 10 + 4 + 10);
+  });
+
+  it('does not reach across a gap wider than its reach', () => {
+    const ledger = row(6, SPREAD.reach + 10);
+    Object.assign(house(ledger, 0), { healthy: 0, roaming: 6 });
+    minutes(ledger, 10);
+    expect(house(ledger, 1).healthy).toBe(10);
+    expect(house(ledger, 0).roaming).toBe(6);
+  });
+
+  it("leaves the window's own buildings to the game", () => {
+    const ledger = row(8);
+    Object.assign(house(ledger, 0), { healthy: 0, roaming: 4 });
+    minutes(ledger, 10, 3, new Set([101])); // house 1 is in the window
+    expect(house(ledger, 1)).toMatchObject({ healthy: 10, roaming: 0, tick: 0 });
+    expect(house(ledger, 2).healthy).toBeLessThan(10); // the next one is within reach
+  });
+
+  it("breaks a shelter's own door, and the game sees it breached", () => {
+    const ledger: Ledger = new Map();
+    ledger.set(1, { ...entry(10, 0, 0), x: 0, y: 0, shelter: true, roaming: 6 });
+    advanceLedger(ledger, STRIDE, createRng(1));
+    expect(ledger.get(1)).toMatchObject({ breached: true, open: true, shelterDoor: 0 });
+    expect(ledger.get(1)!.healthy).toBeLessThan(10);
+  });
+
+  it('is the same for the same seed', () => {
+    const run = (): string => {
+      const ledger = row(10);
+      Object.assign(house(ledger, 0), { healthy: 0, roaming: 3 });
+      minutes(ledger, 6, 11);
+      return JSON.stringify([...ledger]);
+    };
+    expect(run()).toBe(run());
+  });
+
+  it('walks into the window from just beyond its edge, and no further off', () => {
+    const world = windowWorld([0, 0], 800);
+    const g = createGame(world, OPTIONS);
+    const before = g.horde.alive;
+    const ledger: Ledger = new Map();
+    ledger.set(999_001, { ...entry(0, 0, 0), x: 850, y: 0, roaming: 5 }); // just past the east edge
+    ledger.set(999_002, { ...entry(0, 0, 0), x: 2000, y: 0, roaming: 5 }); // far off
+    ledger.set(world.buildings[0].id, { ...entry(0, 0, 0), x: 0, y: 0, roaming: 3 }); // the window's own
+    expect(enterWindow(g, world, ledger)).toBe(5);
+    expect(g.horde.alive).toBe(before + 5);
+    expect(ledger.get(999_001)?.roaming).toBe(0);
+    expect(ledger.get(999_002)?.roaming).toBe(5);
+    expect(ledger.get(world.buildings[0].id)?.roaming).toBe(3);
+    for (let i = 0; i < g.horde.used; i++) {
+      if (g.horde.state[i] >= ZState.DEAD) continue;
+      expect(g.horde.x[i]).toBeGreaterThan(740);
+      expect(g.horde.x[i]).toBeLessThan(800);
+    }
+  });
+
+  it('moves with the window', () => {
+    const ledger: Ledger = new Map();
+    ledger.set(1, { ...entry(1, 0, 0), x: 10, y: 20 });
+    ledger.set(2, entry(1, 0, 0));
+    shiftLedger(ledger, -400, 5);
+    expect(ledger.get(1)).toMatchObject({ x: -390, y: 25 });
+    expect(Number.isNaN(ledger.get(2)!.x)).toBe(true);
+  });
+});
+
 describe('a ledger read from a save', () => {
   it('fills in what an older save did not keep, so nothing counts as NaN', () => {
     const old = {
@@ -266,6 +377,12 @@ describe('a ledger read from a save', () => {
     expect(e?.roaming).toBe(0);
     expect(e?.tick).toBe(600);
     expect(e?.healthy).toBe(12);
+    expect(Number.isNaN(e?.x)).toBe(true); // where it stands is not known
+    expect(e?.shelter).toBe(false);
+    // a save from before the ledger knew where buildings stand is not a fault
+    const repaired: number[] = [];
+    readLedger([[9, { ...old, roaming: 0, tick: 5 }]], 600, (id) => repaired.push(id));
+    expect(repaired).toEqual([]);
     const out = ledgerOutside(ledger, windowWorld([0, 0], 800));
     expect(Number.isFinite(out.healthy + out.bitten + out.zombies)).toBe(true);
     expect(out.healthy).toBe(12);
@@ -315,6 +432,10 @@ describe('moving to the next window', () => {
       );
     }
     expect(totalBefore).toBeGreaterThan(0);
+    // the ledger knows where the old window's buildings stand, in the new coordinates
+    const first = ledger.get(a.buildings[0].id)!;
+    expect(first.x).toBeCloseTo(ga.outbreak.doorX[0] - 400, 3);
+    expect(first.y).toBeCloseTo(ga.outbreak.doorY[0], 3);
     // and it plays on
     run(gb, b, 5);
     expect(gb.status).toBe('playing');
