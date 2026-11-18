@@ -246,10 +246,12 @@ behind a door works, but it does not win the game.
 - **Cars.** Cars stand parked along the kerbs of the real roads, as in any city (thousands in view,
   each with some fuel in the tank). Walk up to one and press `F` to get in; then `W` is the pedal, `S` the brake (and reverse,
   once stopped), `A` and `D` the wheel, as in any driving game (a car turns only while it rolls);
-  `F` gets you out. On a road it does
-  nearly 80 km/h, off one about 30; it slides along walls and never crosses one, and a hard crash
-  costs the car (and above about 32 km/h, you) something. Zombies in the way are run down, which
-  wears the car a little each time. Inside, most of a blow lands on the bodywork instead of you, until
+  `F` gets you out. Cars come in kinds, and the prompt names them: hatchbacks and sedans are most of
+  the street (a sedan does nearly 80 km/h on a road, about 30 off one); a van is slow, heavy and
+  tough; a pickup keeps going off the road; a sports car does 150 km/h on a road, crawls off it, and
+  breaks easily; a police car is quick. A car slides along walls and never crosses one, and a hard
+  crash costs the car (and above about 32 km/h, you) something, less for a heavy car. Zombies in the
+  way are run down, harder by a heavy car, which wears the car a little each time. Inside, most of a blow lands on the bodywork instead of you, until
   the car is wrecked. The engine is loud (up to 60 m at speed), so a drive brings the horde; the tank
   runs down (a full one lasts about seven minutes flat out), and an empty or wrecked car is left where
   it stands. Cars stay where you leave them, through saves, through the window moving across a big

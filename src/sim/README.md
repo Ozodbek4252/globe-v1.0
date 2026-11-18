@@ -42,8 +42,11 @@ cross into tiles the survivor has never been near. The city's numbers are the wi
 `src/lib/rng.ts` is the seeded random number generator they all use.
 
 Cars (`vehicle.ts`) are parked along the map's roads when a game is made (seeded, so the same map and
-seed give the same cars), and the roads are stamped into the collision world's grid (`OCC_ROAD`) so
-the car knows when it is on one. At the wheel the survivor _is_ the car: `game.player` rides at its
+seed give the same cars), each of a kind drawn by the shares in `KINDS` (hatchback, sedan, van,
+pickup, sports car, police car: its own speed on and off the road, pull, condition, tank, weight and
+noise; `Car.kind` indexes it, and a save without one is a sedan), and the roads are stamped into the
+collision world's grid (`OCC_ROAD`) so the car knows when it is on one. The wheel turns less the
+faster the car goes (`CAR.steerEase`), so the fast kinds hold the road. At the wheel the survivor _is_ the car: `game.player` rides at its
 position with its velocity, so the horde, the flow field, the people and the counts need no special
 case, except that the horde is told the survivor's radius. Only the driven car is stepped; the rest
 stand still until someone gets in. When the window of a big city moves, the cars the new window holds

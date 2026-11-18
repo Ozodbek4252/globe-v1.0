@@ -492,7 +492,7 @@ onBeforeUnmount(() => {
             :aria-valuenow="Math.round(player.car.condition * 100)"
           >
             <i :style="{ width: Math.round(player.car.condition * 100) + '%' }"></i>
-            <span>{{ player.car.wrecked ? 'Wrecked' : 'Car' }}</span>
+            <span>{{ player.car.wrecked ? 'Wrecked' : player.car.kind }}</span>
           </span>
         </div>
         <div

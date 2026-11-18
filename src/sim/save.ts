@@ -20,7 +20,7 @@ import {
 } from './game';
 import type { Noise } from './horde';
 import type { PlayerState } from './player';
-import { CAR, type Car } from './vehicle';
+import { KIND, KINDS, type Car } from './vehicle';
 import type { LedgerEntry } from './window';
 
 /** The arrays and counters of one of the in-place structures (the horde, the people, the buildings). */
@@ -216,7 +216,12 @@ export function loadGame(world: GameWorld, saved: SavedGame): GameState {
   g.doorEventTimer = s.doorEventTimer;
   // (a game saved before there were cars keeps the ones just parked for it)
   // (a save from a build whose cars could not break has no condition: as good as new)
-  if (s.cars) g.cars = s.cars.map((c) => ({ ...c, hp: c.hp ?? CAR.hp }));
+  // (a save from before there were kinds of car: they were all sedans)
+  if (s.cars)
+    g.cars = s.cars.map((c) => {
+      const kind = typeof c.kind === 'number' && KINDS[c.kind] ? c.kind : KIND.SEDAN;
+      return { ...c, kind, hp: c.hp ?? KINDS[kind].hp };
+    });
   g.driving = s.cars ? (s.driving ?? -1) : -1;
   g.stats = { ...s.stats };
   g.rng.state = s.rng;

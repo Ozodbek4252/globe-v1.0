@@ -58,7 +58,7 @@ import { sendHunting, spawnZombie, ZKind, ZState } from '../sim/horde';
 import { HState, spawnHuman } from '../sim/humans';
 import { speedOf, type PlayerState } from '../sim/player';
 import { isSavedGame, loadGame, saveGame, type SavedGame } from '../sim/save';
-import { CAR, createCar, onRoad, wrecked, type Car } from '../sim/vehicle';
+import { CAR, createCar, KIND, kindOf, onRoad, wrecked, type Car } from '../sim/vehicle';
 import {
   advanceLedger,
   enterWindow,
@@ -199,8 +199,8 @@ export interface PlayerStatus {
   population: { healthy: number; bitten: number; zombies: number; initial: number };
   /** What the survivor could do where they stand: use a door, get into a car (null when nothing). */
   prompt: { label: string; name: string } | null;
-  /** At the wheel: how fast (m/s), the tank (0 to 1), the car's condition (0 to 1); null on foot. */
-  car: { speed: number; fuel: number; condition: number; wrecked: boolean } | null;
+  /** At the wheel: what it is, how fast (m/s), the tank (0 to 1), the car's condition (0 to 1); null on foot. */
+  car: { kind: string; speed: number; fuel: number; condition: number; wrecked: boolean } | null;
   /** The radar is on: the minimap is available. */
   radarOn: boolean;
   /** The next goal, how far off it is, and where it lies on the screen (radians clockwise from up). */
@@ -290,8 +290,8 @@ export interface CityDebug {
   goTo(kind: PlaceKind): boolean;
   /** Stop the game stepping (the picture keeps drawing), so a scene can be held still. */
   freeze(on: boolean): void;
-  /** Put a car beside the survivor, pointing their way, with a full tank. Returns its index. */
-  summonCar(): number;
+  /** Put a car (a sedan, or the `KIND` asked for) beside the survivor, pointing their way, with a full tank. Returns its index. */
+  summonCar(kind?: number): number;
   /** What the scene is feeding the game right now, and the car being driven. */
   probe(): {
     paused: boolean;
@@ -1673,7 +1673,7 @@ export async function createCityScene(
 
     // flashlight: on by itself when it gets dark, and L overrides. At the wheel it is the headlamps.
     const lit = flashlightOn() && game.inside < 0;
-    const beamFrom = driving ? CAR.length / 2 : 0.3;
+    const beamFrom = driving ? kindOf(game.cars[game.driving]).length / 2 : 0.3;
     const beamTo = driving ? 34 : 16;
     flashlight.intensity = lit ? (driving ? 1400 : 420) * (0.35 + 0.65 * darkness) : 0;
     flashlight.angle = driving ? 0.7 : 0.52;
@@ -1821,9 +1821,10 @@ export async function createCityScene(
         car:
           game.driving >= 0
             ? {
+                kind: kindOf(game.cars[game.driving]).name,
                 speed: Math.abs(game.cars[game.driving].speed),
                 fuel: game.cars[game.driving].fuel,
-                condition: game.cars[game.driving].hp / CAR.hp,
+                condition: game.cars[game.driving].hp / kindOf(game.cars[game.driving]).hp,
                 wrecked: wrecked(game.cars[game.driving]),
               }
             : null,
@@ -2102,11 +2103,11 @@ export async function createCityScene(
               car: game.driving >= 0 ? { ...game.cars[game.driving] } : null,
             };
           },
-          summonCar() {
+          summonCar(kind = KIND.SEDAN) {
             const p = game.player;
             const ox = -Math.sin(p.heading) * 3;
             const oy = Math.cos(p.heading) * 3;
-            game.cars.push(createCar(p.x + ox, p.y + oy, p.heading, 1));
+            game.cars.push(createCar(p.x + ox, p.y + oy, p.heading, 1, kind));
             return game.cars.length - 1;
           },
           cars() {

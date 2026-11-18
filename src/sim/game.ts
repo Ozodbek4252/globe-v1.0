@@ -68,6 +68,7 @@ import {
   stepOutSpot,
   wrecked,
   type Car,
+  kindOf,
 } from './vehicle';
 import { validSpot, type GameWorld, type WorldRoad } from './world';
 
@@ -876,7 +877,7 @@ export function stepGame(g: GameState, input: GameInput, world: GameWorld, dt: n
       reachable: world.reachable,
       px: g.player.x,
       py: g.player.y,
-      playerRadius: g.driving >= 0 ? CAR.radius : PLAYER.radius,
+      playerRadius: g.driving >= 0 ? kindOf(g.cars[g.driving]).radius : PLAYER.radius,
       playerAlive: playing,
       hidden: playing && g.inside >= 0,
       targets: g.targets,
@@ -1400,17 +1401,22 @@ export function interactionAt(g: GameState, world: GameWorld): Interaction | nul
   }
   if (g.driving >= 0) {
     const car = g.cars[g.driving];
-    const name = wrecked(car) ? 'The car is wrecked' : car.fuel <= 0 ? 'Out of fuel' : 'Car';
+    const name = wrecked(car)
+      ? 'The car is wrecked'
+      : car.fuel <= 0
+        ? 'Out of fuel'
+        : kindOf(car).name;
     return { kind: 'car', car: g.driving, label: 'Get out', name };
   }
   const car = carInReach(g.cars, g.player.x, g.player.y);
   if (car >= 0) {
     const c = g.cars[car];
+    const what = kindOf(c).name.toLowerCase();
     const name = wrecked(c)
-      ? 'Wrecked'
+      ? `Wrecked ${what}`
       : c.fuel <= 0
-        ? 'Out of fuel'
-        : `Fuel ${Math.round(c.fuel * 100)}%`;
+        ? `${kindOf(c).name}, out of fuel`
+        : `${kindOf(c).name}, fuel ${Math.round(c.fuel * 100)}%`;
     return { kind: 'car', car, label: 'Get in', name };
   }
   let near: Place | null = null;
@@ -1497,10 +1503,11 @@ function drive(g: GameState, act: GameInput, world: GameWorld, dt: number): void
     exhausted: p.exhausted && stamina < PLAYER.exhaustedUntil,
   };
 
-  // a wall: a knock, or a crash
+  // a wall: a knock, or a crash (a heavy car shrugs off more of it)
+  const kind = kindOf(car);
   if (crash > CAR.crashSpeed) {
     const over = crash - CAR.crashSpeed;
-    car.hp = Math.max(0, car.hp - over * CAR.crashWear);
+    car.hp = Math.max(0, car.hp - (over * CAR.crashWear) / kind.mass);
     addNoise(g, car.x, car.y, CAR.crashNoise, GAME.noise.shotTtl, true);
     emit(g, { type: 'noise', x: car.x, y: car.y, radius: CAR.crashNoise });
     emit(g, { type: 'car', what: 'crash', x: car.x, y: car.y, force: crash });
@@ -1519,7 +1526,7 @@ function drive(g: GameState, act: GameInput, world: GameWorld, dt: number): void
   const h = g.horde;
   const speed = Math.max(before, Math.abs(car.speed));
   if (speed >= CAR.hitSpeed) {
-    const reach = CAR.radius + ZOMBIE.radius;
+    const reach = kind.radius + ZOMBIE.radius;
     const reach2 = reach * reach;
     const dirX = Math.cos(car.heading) * Math.sign(car.speed || 1);
     const dirY = Math.sin(car.heading) * Math.sign(car.speed || 1);
@@ -1532,7 +1539,9 @@ function drive(g: GameState, act: GameInput, world: GameWorld, dt: number): void
       if (d2 > reach2) continue;
       struck++;
       // struck from where the car came from, so the body flies on ahead of it, and off to the side
-      if (damageZombie(h, i, speed * CAR.hitDamage, car.x - dirX * 2, car.y - dirY * 2)) {
+      if (
+        damageZombie(h, i, speed * CAR.hitDamage * kind.mass, car.x - dirX * 2, car.y - dirY * 2)
+      ) {
         registerKill(g, h.x[i], h.y[i]);
         emit(g, { type: 'hit', x: h.x[i], y: h.y[i], kill: true });
         continue;
@@ -1545,7 +1554,7 @@ function drive(g: GameState, act: GameInput, world: GameWorld, dt: number): void
     }
     if (struck > 0) {
       car.speed -= Math.sign(car.speed) * Math.min(Math.abs(car.speed), CAR.hitSlow * struck);
-      car.hp = Math.max(0, car.hp - CAR.hitWear * struck);
+      car.hp = Math.max(0, car.hp - (CAR.hitWear * struck) / kind.mass);
       if (wrecked(car)) emit(g, { type: 'car', what: 'wrecked', x: car.x, y: car.y, force: 0 });
     }
   }
